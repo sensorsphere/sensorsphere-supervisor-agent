@@ -10,6 +10,7 @@ IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}"
 echo "Publishing ${IMAGE}:${VERSION} and ${IMAGE}:latest"
 
 docker buildx build \
+  --build-arg "IMAGE_VERSION=${VERSION}" \
   --platform linux/amd64,linux/arm64,linux/arm/v7 \
   --tag "${IMAGE}:${VERSION}" \
   --tag "${IMAGE}:latest" \
