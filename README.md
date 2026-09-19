@@ -2,9 +2,11 @@
 
 SensorSphere Supervisor Agent is the host-local lifecycle service for known SensorSphere agents. It owns Docker lifecycle access so managed agents never need direct access to the Docker daemon.
 
-## Scope of 0.3.0
+## Scope of 0.3.1
 
-The Supervisor is now provider-neutral across known SensorSphere agent types:
+0.3.1 is the first maintenance release used to validate the complete SensorSphere-driven self-update path introduced in 0.3.0. It keeps the same supported lifecycle surface and security model.
+
+The Supervisor is provider-neutral across known SensorSphere agent types:
 
 - `device-agent`
 - `monitor-agent`
