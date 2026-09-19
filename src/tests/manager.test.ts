@@ -4,79 +4,150 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { SupervisorConfig } from "../config.js";
-import { DeviceAgentManager } from "../manager.js";
+import { ManagedAgentManager } from "../manager.js";
 import type { CommandResult, CommandRunner } from "../runner.js";
 
 class FakeRunner implements CommandRunner {
   calls: Array<{ command: string; args: string[] }> = [];
   failOn: string | null = null;
-  image = "ghcr.io/sensorsphere/sensorsphere-device-agent:1.1.1";
+  image = "ghcr.io/sensorsphere/sensorsphere-device-agent:1.2.1";
 
   async run(command: string, args: string[]): Promise<CommandResult> {
     this.calls.push({ command, args });
     const joined = `${command} ${args.join(" ")}`;
     if (this.failOn && joined.includes(this.failOn)) throw new Error(`forced failure: ${this.failOn}`);
-    if (args.includes("-q") && args.includes("device-agent")) return { stdout: "container123\n", stderr: "" };
+    if (args.includes("-q") && (args.includes("device-agent") || args.includes("monitor-agent"))) {
+      return { stdout: "container123\n", stderr: "" };
+    }
     if (command === "docker" && args[0] === "inspect") return { stdout: `running|${this.image}\n`, stderr: "" };
     return { stdout: "", stderr: "" };
   }
 }
 
-async function fixture(): Promise<{ dir: string; config: SupervisorConfig; runner: FakeRunner }> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "supervisor-test-"));
-  await fs.writeFile(path.join(dir, ".env"), "SENSORSPHERE_URL=http://example\nDEVICE_AGENT_IMAGE=ghcr.io/sensorsphere/sensorsphere-device-agent:1.1.0\n", "utf8");
-  await fs.writeFile(path.join(dir, "docker-compose.yml"), "services:\n  device-agent:\n    image: test\n", "utf8");
+async function fixture(): Promise<{ root: string; config: SupervisorConfig; runner: FakeRunner }> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "supervisor-test-"));
   return {
-    dir,
+    root,
     config: {
-      socketPath: path.join(dir, "supervisor.sock"),
+      socketPath: path.join(root, "supervisor.sock"),
       socketGid: 0,
-      managedAgentInstallDir: dir,
-      managedImage: "ghcr.io/sensorsphere/sensorsphere-device-agent",
-      composeSourceUrlTemplate: "https://example.invalid/v{version}/docker-compose.yml",
-      updateTimeoutMs: 1000,
+      managedRoot: root,
+      defaultPuid: 0,
+      defaultPgid: 0,
+      operationTimeoutMs: 1000,
     },
     runner: new FakeRunner(),
   };
 }
 
-const okFetch: typeof fetch = async () => new Response("services:\n  device-agent:\n    image: test\n", { status: 200 });
+async function existingDevice(root: string): Promise<string> {
+  const dir = path.join(root, "sensorsphere-device-agent");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, ".env"),
+    "SENSORSPHERE_URL=http://example\nDEVICE_AGENT_IMAGE=ghcr.io/sensorsphere/sensorsphere-device-agent:1.2.0\n",
+    "utf8",
+  );
+  await fs.writeFile(path.join(dir, "docker-compose.yml"), "services:\n  device-agent:\n    image: test\n", "utf8");
+  return dir;
+}
 
-test("update replaces compose and image, then recreates only device-agent", async () => {
-  const { dir, config, runner } = await fixture();
-  const manager = new DeviceAgentManager(config, runner, okFetch);
-  const result = await manager.update("1.1.1");
-  const env = await fs.readFile(path.join(dir, ".env"), "utf8");
-  assert.match(env, /DEVICE_AGENT_IMAGE=ghcr\.io\/sensorsphere\/sensorsphere-device-agent:1\.1\.1/);
-  assert.equal(result.target_version, "1.1.1");
-  assert.ok(runner.calls.some(({ args }) => args.includes("pull") && args.includes("device-agent")));
-  assert.ok(runner.calls.some(({ args }) => args.includes("up") && args.includes("--no-deps") && args.includes("device-agent")));
+const fetchForKnownAgents: typeof fetch = async (input) => {
+  const url = String(input);
+  if (url.includes("sensorsphere-monitor-agent")) {
+    return new Response("services:\n  monitor-agent:\n    image: test\n", { status: 200 });
+  }
+  return new Response("services:\n  device-agent:\n    image: test\n", { status: 200 });
+};
+
+test("legacy status resolves to device-agent/main", async () => {
+  const { root, config, runner } = await fixture();
+  await existingDevice(root);
+  runner.image = "ghcr.io/sensorsphere/sensorsphere-device-agent:1.2.0";
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  const status = await manager.getStatus();
+  assert.equal(status.agent_type, "device-agent");
+  assert.equal(status.instance, "main");
+  assert.equal(status.installed, true);
+  assert.equal(status.configured_version, "1.2.0");
 });
 
-test("invalid versions are rejected before any Docker operation", async () => {
+test("status for an absent named instance is safe", async () => {
   const { config, runner } = await fixture();
-  const manager = new DeviceAgentManager(config, runner, okFetch);
-  await assert.rejects(() => manager.update("../../latest"), /invalid target version/);
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  const status = await manager.getStatus("monitor-agent", "i2");
+  assert.equal(status.installed, false);
+  assert.equal(status.container_state, "not_installed");
+  assert.match(status.install_dir, /sensorsphere-monitor-agent-i2$/);
   assert.equal(runner.calls.length, 0);
 });
 
-test("update restores environment and compose when recreation fails", async () => {
-  const { dir, config, runner } = await fixture();
-  runner.failOn = "up -d --no-deps device-agent";
-  const manager = new DeviceAgentManager(config, runner, okFetch);
-  await assert.rejects(() => manager.update("1.1.1"), /forced failure/);
+test("deploy creates a monitor-agent instance from the known registry", async () => {
+  const { root, config, runner } = await fixture();
+  runner.image = "ghcr.io/sensorsphere/sensorsphere-monitor-agent:1.0.9";
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  const result = await manager.deploy("monitor-agent", "i2", "1.0.9", {
+    SENSORSPHERE_URL: "http://example",
+    SENSORSPHERE_AGENT_TOKEN: "secret",
+    AGENT_NAME: "monitor-i2",
+  });
+  const dir = path.join(root, "sensorsphere-monitor-agent-i2");
   const env = await fs.readFile(path.join(dir, ".env"), "utf8");
-  const compose = await fs.readFile(path.join(dir, "docker-compose.yml"), "utf8");
-  assert.match(env, /DEVICE_AGENT_IMAGE=ghcr\.io\/sensorsphere\/sensorsphere-device-agent:1\.1\.0/);
-  assert.match(compose, /image: test/);
+  assert.match(env, /MONITOR_AGENT_IMAGE=ghcr\.io\/sensorsphere\/sensorsphere-monitor-agent:1\.0\.9/);
+  assert.match(env, /SENSORSPHERE_AGENT_TOKEN="secret"/);
+  assert.match(env, /PUID="0"/);
+  assert.equal(result.target_version, "1.0.9");
+  assert.ok(runner.calls.some(({ args }) => args.includes("pull") && args.includes("monitor-agent")));
+  assert.ok(runner.calls.some(({ args }) => args.includes("up") && args.includes("monitor-agent")));
 });
 
-test("download failures include the resolved compose URL", async () => {
+test("deploy rejects missing secrets and non-allowlisted environment keys", async () => {
   const { config, runner } = await fixture();
-  const failingFetch: typeof fetch = async () => new Response("not found", { status: 404 });
-  const manager = new DeviceAgentManager(config, runner, failingFetch);
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
   await assert.rejects(
-    () => manager.update("1.1.1"),
-    /HTTP 404 URL=https:\/\/example\.invalid\/v1\.1\.1\/docker-compose\.yml/,
+    () => manager.deploy("monitor-agent", "main", "1.0.9", { SENSORSPHERE_URL: "http://example" }),
+    /SENSORSPHERE_AGENT_TOKEN is required/,
   );
+  await assert.rejects(
+    () => manager.deploy("device-agent", "main", "1.2.0", {
+      SENSORSPHERE_URL: "http://example",
+      SENSORSPHERE_DEVICE_AGENT_TOKEN: "secret",
+      EVIL_IMAGE: "alpine:latest",
+    }),
+    /EVIL_IMAGE is not allowed/,
+  );
+  assert.equal(runner.calls.length, 0);
+});
+
+test("legacy update still updates device-agent/main and rolls back on failure", async () => {
+  const { root, config, runner } = await fixture();
+  const dir = await existingDevice(root);
+  runner.image = "ghcr.io/sensorsphere/sensorsphere-device-agent:1.2.1";
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  const result = await manager.update("1.2.1", "device-agent", "main");
+  assert.equal(result.target_version, "1.2.1");
+  assert.match(await fs.readFile(path.join(dir, ".env"), "utf8"), /DEVICE_AGENT_IMAGE=.*:1\.2\.1/);
+
+  runner.failOn = "up -d --no-deps device-agent";
+  await assert.rejects(() => manager.update("1.2.2", "device-agent", "main"), /forced failure/);
+  assert.match(await fs.readFile(path.join(dir, ".env"), "utf8"), /DEVICE_AGENT_IMAGE=.*:1\.2\.1/);
+});
+
+test("remove archives an installation instead of deleting it", async () => {
+  const { root, config, runner } = await fixture();
+  await existingDevice(root);
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  const result = await manager.remove("device-agent", "main");
+  assert.equal(result.removed, true);
+  assert.match(String(result.archive_dir), /sensorsphere-device-agent\.removed-/);
+  assert.equal(await fs.stat(String(result.archive_dir)).then(() => true), true);
+  await assert.rejects(() => fs.stat(path.join(root, "sensorsphere-device-agent")));
+});
+
+test("invalid versions and path-like instance names are rejected", async () => {
+  const { config, runner } = await fixture();
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  await assert.rejects(() => manager.update("../../latest", "device-agent", "main"), /invalid target version/);
+  await assert.rejects(() => manager.getStatus("monitor-agent", "../x"), /invalid instance name/);
+  assert.equal(runner.calls.length, 0);
 });

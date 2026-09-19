@@ -5,13 +5,14 @@ services:
     environment:
       SUPERVISOR_SOCKET_PATH: "${SUPERVISOR_SOCKET_PATH:-/run/sensorsphere-supervisor-agent/supervisor.sock}"
       SUPERVISOR_SOCKET_GID: "${SUPERVISOR_SOCKET_GID:-0}"
-      SUPERVISOR_MANAGED_AGENT_INSTALL_DIR: "${DEVICE_AGENT_INSTALL_DIR}"
-      SUPERVISOR_MANAGED_IMAGE: "${SUPERVISOR_MANAGED_IMAGE:-ghcr.io/sensorsphere/sensorsphere-device-agent}"
-      SUPERVISOR_COMPOSE_SOURCE_URL_TEMPLATE: "${SUPERVISOR_COMPOSE_SOURCE_URL_TEMPLATE:-}"
-      SUPERVISOR_UPDATE_TIMEOUT_MS: "${SUPERVISOR_UPDATE_TIMEOUT_MS:-120000}"
+      SUPERVISOR_MANAGED_ROOT: "${SUPERVISOR_MANAGED_ROOT}"
+      SUPERVISOR_DEFAULT_PUID: "${SUPERVISOR_DEFAULT_PUID:-1000}"
+      SUPERVISOR_DEFAULT_PGID: "${SUPERVISOR_DEFAULT_PGID:-1000}"
+      SUPERVISOR_OPERATION_TIMEOUT_MS: "${SUPERVISOR_OPERATION_TIMEOUT_MS:-120000}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - "${SUPERVISOR_SOCKET_DIR:-/run/sensorsphere-supervisor-agent}:/run/sensorsphere-supervisor-agent"
-      # The managed directory is mounted at the same absolute path inside the
-      # supervisor so Docker Compose resolves relative bind mounts for the host correctly.
-      - "${DEVICE_AGENT_INSTALL_DIR}:${DEVICE_AGENT_INSTALL_DIR}"
+      # The generic managed root is mounted at the same absolute path inside the
+      # Supervisor so Compose project directories and relative bind mounts resolve
+      # identically on the host and in the Supervisor container.
+      - "${SUPERVISOR_MANAGED_ROOT}:${SUPERVISOR_MANAGED_ROOT}"

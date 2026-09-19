@@ -1,17 +1,93 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SupervisorConfig } from "./config.js";
+import type { ManagedAgentType } from "./protocol.js";
 import type { CommandRunner } from "./runner.js";
 
 const VERSION_RE = /^\d+\.\d+\.\d+(?:[-.][A-Za-z0-9][A-Za-z0-9.-]*)?$/;
+const INSTANCE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const ENV_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
+
+interface AgentDefinition {
+  type: ManagedAgentType;
+  serviceName: string;
+  image: string;
+  imageEnv: string;
+  directoryName: string;
+  composeSourceUrlTemplate: string;
+  requiredEnvironment: string[];
+  allowedEnvironment: Set<string>;
+}
+
+interface ManagedTarget {
+  agentType: ManagedAgentType;
+  instance: string;
+  definition: AgentDefinition;
+  installDir: string;
+}
 
 interface ManagedPaths {
   env: string;
   compose: string;
 }
 
+const COMMON_ENVIRONMENT = ["PUID", "PGID", "DATA_DIR", "AGENT_NAME", "AGENT_LABELS"];
+
+const DEFINITIONS: Record<ManagedAgentType, AgentDefinition> = {
+  "device-agent": {
+    type: "device-agent",
+    serviceName: "device-agent",
+    image: "ghcr.io/sensorsphere/sensorsphere-device-agent",
+    imageEnv: "DEVICE_AGENT_IMAGE",
+    directoryName: "sensorsphere-device-agent",
+    composeSourceUrlTemplate: "https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-agent/v{version}/docker-compose.yml",
+    requiredEnvironment: ["SENSORSPHERE_URL", "SENSORSPHERE_DEVICE_AGENT_TOKEN"],
+    allowedEnvironment: new Set([
+      ...COMMON_ENVIRONMENT,
+      "SENSORSPHERE_URL",
+      "SENSORSPHERE_DEVICE_AGENT_TOKEN",
+      "SENSORSPHERE_HEARTBEAT_INTERVAL_SECONDS",
+      "SENSORSPHERE_DEVICE_AGENT_WS_URL",
+      "SENSORSPHERE_LOG_LEVEL",
+      "SENSORSPHERE_RECONNECT_INITIAL_MS",
+      "SENSORSPHERE_RECONNECT_MAX_MS",
+      "SENSORSPHERE_SUPERVISOR_SOCKET_PATH",
+      "SENSORSPHERE_SUPERVISOR_REQUEST_TIMEOUT_MS",
+      "YEELIGHT_REQUEST_TIMEOUT_MS",
+      "ESPHOME_REQUEST_TIMEOUT_MS",
+      "ESPHOME_NOISE_PSK",
+      "PROXMOX_REQUEST_TIMEOUT_MS",
+      "PROXMOX_ENDPOINTS_JSON",
+    ]),
+  },
+  "monitor-agent": {
+    type: "monitor-agent",
+    serviceName: "monitor-agent",
+    image: "ghcr.io/sensorsphere/sensorsphere-monitor-agent",
+    imageEnv: "MONITOR_AGENT_IMAGE",
+    directoryName: "sensorsphere-monitor-agent",
+    composeSourceUrlTemplate: "https://raw.githubusercontent.com/sensorsphere/sensorsphere-monitor-agent/v{version}/docker-compose.yml",
+    requiredEnvironment: ["SENSORSPHERE_URL", "SENSORSPHERE_AGENT_TOKEN"],
+    allowedEnvironment: new Set([
+      ...COMMON_ENVIRONMENT,
+      "SENSORSPHERE_URL",
+      "SENSORSPHERE_AGENT_TOKEN",
+      "SENSORSPHERE_HEARTBEAT_INTERVAL_SECONDS",
+      "SENSORSPHERE_CONFIG_POLL_INTERVAL_SECONDS",
+      "SENSORSPHERE_REQUEST_TIMEOUT_MS",
+      "SENSORSPHERE_STATE_FILE",
+      "SENSORSPHERE_QUEUE_MAX_RESULTS",
+      "SENSORSPHERE_QUEUE_RETENTION_HOURS",
+      "SENSORSPHERE_LOG_LEVEL",
+    ]),
+  },
+};
+
 export interface ManagedStatus {
+  agent_type: ManagedAgentType;
+  instance: string;
   install_dir: string;
+  installed: boolean;
   configured_image: string | null;
   configured_version: string | null;
   container_id: string | null;
@@ -19,8 +95,12 @@ export interface ManagedStatus {
   running_image: string | null;
 }
 
-export class DeviceAgentManager {
-  private updateInProgress = false;
+function isNotFound(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+export class ManagedAgentManager {
+  private readonly operationsInProgress = new Set<string>();
 
   constructor(
     private readonly config: SupervisorConfig,
@@ -28,151 +108,323 @@ export class DeviceAgentManager {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  private paths(): ManagedPaths {
+  private target(agentType: ManagedAgentType = "device-agent", instance = "main"): ManagedTarget {
+    const normalizedInstance = instance.trim() || "main";
+    if (!INSTANCE_RE.test(normalizedInstance)) throw new Error("invalid instance name");
+    const definition = DEFINITIONS[agentType];
+    if (!definition) throw new Error("unsupported agent type");
+    const directory = normalizedInstance === "main"
+      ? definition.directoryName
+      : `${definition.directoryName}-${normalizedInstance}`;
+    const installDir = path.resolve(this.config.managedRoot, directory);
+    const relative = path.relative(this.config.managedRoot, installDir);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("managed target escapes SUPERVISOR_MANAGED_ROOT");
+    return { agentType, instance: normalizedInstance, definition, installDir };
+  }
+
+  private key(target: ManagedTarget): string {
+    return `${target.agentType}/${target.instance}`;
+  }
+
+  private paths(target: ManagedTarget): ManagedPaths {
     return {
-      env: path.join(this.config.managedAgentInstallDir, ".env"),
-      compose: path.join(this.config.managedAgentInstallDir, "docker-compose.yml"),
+      env: path.join(target.installDir, ".env"),
+      compose: path.join(target.installDir, "docker-compose.yml"),
     };
   }
 
-  private composeArgs(paths: ManagedPaths, extra: string[]): string[] {
+  private composeArgs(target: ManagedTarget, paths: ManagedPaths, extra: string[]): string[] {
     return [
       "compose",
-      "--project-directory", this.config.managedAgentInstallDir,
+      "--project-directory", target.installDir,
       "--env-file", paths.env,
       "-f", paths.compose,
       ...extra,
     ];
   }
 
-  private async readEnvImage(envPath: string): Promise<string | null> {
-    const content = await fs.readFile(envPath, "utf8");
+  private validateVersion(version: string): string {
+    const normalized = version.trim();
+    if (!VERSION_RE.test(normalized)) throw new Error("invalid target version");
+    return normalized;
+  }
+
+  private async exists(filePath: string): Promise<boolean> {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch (error) {
+      if (isNotFound(error)) return false;
+      throw error;
+    }
+  }
+
+  private async readEnvImage(target: ManagedTarget, envPath: string): Promise<string | null> {
+    let content: string;
+    try {
+      content = await fs.readFile(envPath, "utf8");
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
+    const prefix = `${target.definition.imageEnv}=`;
     const lines = content.split(/\r?\n/);
     for (let index = lines.length - 1; index >= 0; index -= 1) {
       const line = lines[index];
-      if (line?.startsWith("DEVICE_AGENT_IMAGE=")) return line.slice("DEVICE_AGENT_IMAGE=".length).trim() || null;
+      if (line?.startsWith(prefix)) return line.slice(prefix.length).trim() || null;
     }
     return null;
   }
 
-  private versionFromImage(image: string | null): string | null {
-    if (!image?.startsWith(`${this.config.managedImage}:`)) return null;
-    return image.slice(this.config.managedImage.length + 1);
+  private versionFromImage(target: ManagedTarget, image: string | null): string | null {
+    if (!image?.startsWith(`${target.definition.image}:`)) return null;
+    return image.slice(target.definition.image.length + 1);
   }
 
-  private async replaceEnvImage(envPath: string, image: string): Promise<void> {
+  private async replaceEnvImage(target: ManagedTarget, envPath: string, image: string): Promise<void> {
     const original = await fs.readFile(envPath, "utf8");
     const hasFinalNewline = original.endsWith("\n");
+    const prefix = `${target.definition.imageEnv}=`;
     const lines = original.split(/\r?\n/);
     let replaced = false;
-    const output = lines.map((line) => {
-      if (line.startsWith("DEVICE_AGENT_IMAGE=")) {
+    const output = lines.map((line: string) => {
+      if (line.startsWith(prefix)) {
         replaced = true;
-        return `DEVICE_AGENT_IMAGE=${image}`;
+        return `${target.definition.imageEnv}=${image}`;
       }
       return line;
     });
     if (!replaced) {
-      if (output.at(-1) === "") output.splice(output.length - 1, 0, `DEVICE_AGENT_IMAGE=${image}`);
-      else output.push(`DEVICE_AGENT_IMAGE=${image}`);
+      if (output.at(-1) === "") output.splice(output.length - 1, 0, `${target.definition.imageEnv}=${image}`);
+      else output.push(`${target.definition.imageEnv}=${image}`);
     }
     let next = output.join("\n");
     if (hasFinalNewline && !next.endsWith("\n")) next += "\n";
     await fs.writeFile(envPath, next, { mode: 0o600 });
   }
 
-  private async inspectContainer(paths: ManagedPaths): Promise<{ id: string | null; state: string; image: string | null }> {
-    const ps = await this.runner.run("docker", this.composeArgs(paths, ["ps", "-q", "device-agent"]), this.config.updateTimeoutMs);
+  private async inspectContainer(target: ManagedTarget, paths: ManagedPaths): Promise<{ id: string | null; state: string; image: string | null }> {
+    if (!(await this.exists(paths.env)) || !(await this.exists(paths.compose))) {
+      return { id: null, state: "not_installed", image: null };
+    }
+    const ps = await this.runner.run(
+      "docker",
+      this.composeArgs(target, paths, ["ps", "-q", target.definition.serviceName]),
+      this.config.operationTimeoutMs,
+    );
     const id = ps.stdout.trim() || null;
     if (!id) return { id: null, state: "not_found", image: null };
     const inspect = await this.runner.run(
       "docker",
       ["inspect", "--format", "{{.State.Status}}|{{.Config.Image}}", id],
-      this.config.updateTimeoutMs,
+      this.config.operationTimeoutMs,
     );
     const [state = "unknown", image = ""] = inspect.stdout.trim().split("|", 2);
     return { id, state, image: image || null };
   }
 
-  async getStatus(): Promise<ManagedStatus> {
-    const paths = this.paths();
-    const configuredImage = await this.readEnvImage(paths.env);
-    const container = await this.inspectContainer(paths);
+  private async downloadCompose(target: ManagedTarget, version: string): Promise<string> {
+    const sourceUrl = target.definition.composeSourceUrlTemplate.replace("{version}", version);
+    const response = await this.fetchImpl(sourceUrl, { redirect: "follow" });
+    if (!response.ok) throw new Error(`failed to download target docker-compose.yml: HTTP ${response.status} URL=${sourceUrl}`);
+    const body = await response.text();
+    if (!body.includes(`${target.definition.serviceName}:`)) {
+      throw new Error(`target docker-compose.yml does not define ${target.definition.serviceName} service`);
+    }
+    return body.endsWith("\n") ? body : `${body}\n`;
+  }
+
+  private validateEnvironment(target: ManagedTarget, environment: Record<string, string>): Record<string, string> {
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(environment)) {
+      if (!ENV_KEY_RE.test(key) || !target.definition.allowedEnvironment.has(key)) {
+        throw new Error(`environment key ${key} is not allowed for ${target.agentType}`);
+      }
+      if (value.includes("\n") || value.includes("\r")) throw new Error(`environment value for ${key} contains a newline`);
+      result[key] = value;
+    }
+    for (const key of target.definition.requiredEnvironment) {
+      if (!result[key]?.trim()) throw new Error(`${key} is required to deploy ${target.agentType}`);
+    }
+    for (const key of ["PUID", "PGID"]) {
+      if (result[key] !== undefined && !/^\d+$/.test(result[key])) throw new Error(`${key} must be a non-negative integer`);
+    }
+    return result;
+  }
+
+  private envLine(key: string, value: string): string {
+    return `${key}=${JSON.stringify(value)}`;
+  }
+
+  private async writeNewEnvironment(target: ManagedTarget, version: string, environment: Record<string, string>): Promise<void> {
+    const values = this.validateEnvironment(target, environment);
+    if (!values.PUID) values.PUID = String(this.config.defaultPuid);
+    if (!values.PGID) values.PGID = String(this.config.defaultPgid);
+    const lines = [
+      `${target.definition.imageEnv}=${target.definition.image}:${version}`,
+      ...Object.entries(values).map(([key, value]) => this.envLine(key, value)),
+      "",
+    ];
+    await fs.writeFile(this.paths(target).env, lines.join("\n"), { mode: 0o600 });
+    await fs.chown(target.installDir, Number(values.PUID), Number(values.PGID));
+    const dataDir = path.join(target.installDir, "data");
+    await fs.mkdir(dataDir, { recursive: true });
+    await fs.chown(dataDir, Number(values.PUID), Number(values.PGID));
+  }
+
+  private async withOperation<T>(target: ManagedTarget, operation: () => Promise<T>): Promise<T> {
+    const key = this.key(target);
+    if (this.operationsInProgress.has(key)) throw new Error(`an operation is already in progress for ${key}`);
+    this.operationsInProgress.add(key);
+    try {
+      return await operation();
+    } finally {
+      this.operationsInProgress.delete(key);
+    }
+  }
+
+  async getStatus(agentType: ManagedAgentType = "device-agent", instance = "main"): Promise<ManagedStatus> {
+    const target = this.target(agentType, instance);
+    const paths = this.paths(target);
+    const installed = await this.exists(paths.env) && await this.exists(paths.compose);
+    const configuredImage = installed ? await this.readEnvImage(target, paths.env) : null;
+    const container = installed ? await this.inspectContainer(target, paths) : { id: null, state: "not_installed", image: null };
     return {
-      install_dir: this.config.managedAgentInstallDir,
+      agent_type: target.agentType,
+      instance: target.instance,
+      install_dir: target.installDir,
+      installed,
       configured_image: configuredImage,
-      configured_version: this.versionFromImage(configuredImage),
+      configured_version: this.versionFromImage(target, configuredImage),
       container_id: container.id,
       container_state: container.state,
       running_image: container.image,
     };
   }
 
-  async update(version: string): Promise<Record<string, unknown>> {
-    const normalizedVersion = version.trim();
-    if (!VERSION_RE.test(normalizedVersion)) throw new Error("invalid target version");
-    if (this.updateInProgress) throw new Error("an update is already in progress");
-    this.updateInProgress = true;
-
-    const paths = this.paths();
-    const targetImage = `${this.config.managedImage}:${normalizedVersion}`;
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const envBackup = `${paths.env}.supervisor-backup-${stamp}`;
-    const composeBackup = `${paths.compose}.supervisor-backup-${stamp}`;
-    const composeTemp = `${paths.compose}.supervisor-new-${stamp}`;
-    let previousImage: string | null = null;
-    let backupsCreated = false;
-
-    try {
-      previousImage = await this.readEnvImage(paths.env);
-      await fs.copyFile(paths.env, envBackup);
-      await fs.copyFile(paths.compose, composeBackup);
-      backupsCreated = true;
-
-      const sourceUrl = this.config.composeSourceUrlTemplate.replace("{version}", normalizedVersion);
-      const response = await this.fetchImpl(sourceUrl, { redirect: "follow" });
-      if (!response.ok) throw new Error(`failed to download target docker-compose.yml: HTTP ${response.status} URL=${sourceUrl}`);
-      const composeBody = await response.text();
-      if (!composeBody.includes("device-agent:")) throw new Error("target docker-compose.yml does not define device-agent service");
-      await fs.writeFile(composeTemp, composeBody.endsWith("\n") ? composeBody : `${composeBody}\n`, "utf8");
-
-      await this.replaceEnvImage(paths.env, targetImage);
-      await fs.rename(composeTemp, paths.compose);
-
-      await this.runner.run("docker", this.composeArgs(paths, ["config", "--quiet"]), this.config.updateTimeoutMs);
-      await this.runner.run("docker", this.composeArgs(paths, ["pull", "device-agent"]), this.config.updateTimeoutMs);
-      await this.runner.run("docker", this.composeArgs(paths, ["up", "-d", "--no-deps", "device-agent"]), this.config.updateTimeoutMs);
-
-      const after = await this.inspectContainer(paths);
-      if (after.state !== "running") throw new Error(`updated Device Agent is not running (state=${after.state})`);
-      if (after.image !== targetImage) throw new Error(`updated Device Agent is running unexpected image ${after.image ?? "unknown"}`);
-
-      return {
-        previous_image: previousImage,
-        target_image: targetImage,
-        target_version: normalizedVersion,
-        container_id: after.id,
-        container_state: after.state,
-        backup_env: envBackup,
-        backup_compose: composeBackup,
-      };
-    } catch (error) {
-      if (backupsCreated) {
-        try {
-          await fs.copyFile(envBackup, paths.env);
-          await fs.copyFile(composeBackup, paths.compose);
-          await this.runner.run("docker", this.composeArgs(paths, ["pull", "device-agent"]), this.config.updateTimeoutMs);
-          await this.runner.run("docker", this.composeArgs(paths, ["up", "-d", "--no-deps", "device-agent"]), this.config.updateTimeoutMs);
-        } catch (rollbackError) {
-          const original = error instanceof Error ? error.message : String(error);
-          const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
-          throw new Error(`${original}; rollback failed: ${rollback}`);
-        }
+  async deploy(
+    agentType: ManagedAgentType,
+    instance: string,
+    version: string,
+    environment: Record<string, string> = {},
+  ): Promise<Record<string, unknown>> {
+    const target = this.target(agentType, instance);
+    const normalizedVersion = this.validateVersion(version);
+    return this.withOperation(target, async () => {
+      const paths = this.paths(target);
+      if (await this.exists(paths.env) || await this.exists(paths.compose)) {
+        throw new Error(`${this.key(target)} is already installed`);
       }
-      throw error;
-    } finally {
-      await fs.rm(composeTemp, { force: true }).catch(() => undefined);
-      this.updateInProgress = false;
-    }
+
+      const failedDir = `${target.installDir}.failed-deploy-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      try {
+        await fs.mkdir(target.installDir, { recursive: true });
+        const composeBody = await this.downloadCompose(target, normalizedVersion);
+        await this.writeNewEnvironment(target, normalizedVersion, environment);
+        await fs.writeFile(paths.compose, composeBody, "utf8");
+
+        await this.runner.run("docker", this.composeArgs(target, paths, ["config", "--quiet"]), this.config.operationTimeoutMs);
+        await this.runner.run("docker", this.composeArgs(target, paths, ["pull", target.definition.serviceName]), this.config.operationTimeoutMs);
+        await this.runner.run("docker", this.composeArgs(target, paths, ["up", "-d", "--no-deps", target.definition.serviceName]), this.config.operationTimeoutMs);
+
+        const after = await this.inspectContainer(target, paths);
+        const targetImage = `${target.definition.image}:${normalizedVersion}`;
+        if (after.state !== "running") throw new Error(`deployed ${this.key(target)} is not running (state=${after.state})`);
+        if (after.image !== targetImage) throw new Error(`deployed ${this.key(target)} is running unexpected image ${after.image ?? "unknown"}`);
+        return { ...(await this.getStatus(agentType, instance)), target_version: normalizedVersion };
+      } catch (error) {
+        try {
+          if (await this.exists(paths.env) && await this.exists(paths.compose)) {
+            await this.runner.run("docker", this.composeArgs(target, paths, ["down", "--remove-orphans"]), this.config.operationTimeoutMs);
+          }
+          if (await this.exists(target.installDir)) await fs.rename(target.installDir, failedDir);
+        } catch {
+          // Preserve the original deployment error. Failed artifacts remain for diagnostics if cleanup also fails.
+        }
+        throw error;
+      }
+    });
+  }
+
+  async update(version: string, agentType: ManagedAgentType = "device-agent", instance = "main"): Promise<Record<string, unknown>> {
+    const target = this.target(agentType, instance);
+    const normalizedVersion = this.validateVersion(version);
+    return this.withOperation(target, async () => {
+      const paths = this.paths(target);
+      if (!(await this.exists(paths.env)) || !(await this.exists(paths.compose))) {
+        throw new Error(`${this.key(target)} is not installed`);
+      }
+      const targetImage = `${target.definition.image}:${normalizedVersion}`;
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const envBackup = `${paths.env}.supervisor-backup-${stamp}`;
+      const composeBackup = `${paths.compose}.supervisor-backup-${stamp}`;
+      const composeTemp = `${paths.compose}.supervisor-new-${stamp}`;
+      let previousImage: string | null = null;
+      let backupsCreated = false;
+
+      try {
+        previousImage = await this.readEnvImage(target, paths.env);
+        await fs.copyFile(paths.env, envBackup);
+        await fs.copyFile(paths.compose, composeBackup);
+        backupsCreated = true;
+        await fs.writeFile(composeTemp, await this.downloadCompose(target, normalizedVersion), "utf8");
+        await this.replaceEnvImage(target, paths.env, targetImage);
+        await fs.rename(composeTemp, paths.compose);
+
+        await this.runner.run("docker", this.composeArgs(target, paths, ["config", "--quiet"]), this.config.operationTimeoutMs);
+        await this.runner.run("docker", this.composeArgs(target, paths, ["pull", target.definition.serviceName]), this.config.operationTimeoutMs);
+        await this.runner.run("docker", this.composeArgs(target, paths, ["up", "-d", "--no-deps", target.definition.serviceName]), this.config.operationTimeoutMs);
+
+        const after = await this.inspectContainer(target, paths);
+        if (after.state !== "running") throw new Error(`updated ${this.key(target)} is not running (state=${after.state})`);
+        if (after.image !== targetImage) throw new Error(`updated ${this.key(target)} is running unexpected image ${after.image ?? "unknown"}`);
+        return {
+          agent_type: target.agentType,
+          instance: target.instance,
+          previous_image: previousImage,
+          target_image: targetImage,
+          target_version: normalizedVersion,
+          container_id: after.id,
+          container_state: after.state,
+          backup_env: envBackup,
+          backup_compose: composeBackup,
+        };
+      } catch (error) {
+        if (backupsCreated) {
+          try {
+            await fs.copyFile(envBackup, paths.env);
+            await fs.copyFile(composeBackup, paths.compose);
+            await this.runner.run("docker", this.composeArgs(target, paths, ["pull", target.definition.serviceName]), this.config.operationTimeoutMs);
+            await this.runner.run("docker", this.composeArgs(target, paths, ["up", "-d", "--no-deps", target.definition.serviceName]), this.config.operationTimeoutMs);
+          } catch (rollbackError) {
+            const original = error instanceof Error ? error.message : String(error);
+            const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+            throw new Error(`${original}; rollback failed: ${rollback}`);
+          }
+        }
+        throw error;
+      } finally {
+        await fs.rm(composeTemp, { force: true });
+      }
+    });
+  }
+
+  async remove(agentType: ManagedAgentType, instance = "main"): Promise<Record<string, unknown>> {
+    const target = this.target(agentType, instance);
+    return this.withOperation(target, async () => {
+      const paths = this.paths(target);
+      if (!(await this.exists(paths.env)) || !(await this.exists(paths.compose))) {
+        throw new Error(`${this.key(target)} is not installed`);
+      }
+      await this.runner.run("docker", this.composeArgs(target, paths, ["down", "--remove-orphans"]), this.config.operationTimeoutMs);
+      const archiveDir = `${target.installDir}.removed-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      await fs.rename(target.installDir, archiveDir);
+      return {
+        agent_type: target.agentType,
+        instance: target.instance,
+        removed: true,
+        archive_dir: archiveDir,
+      };
+    });
   }
 }

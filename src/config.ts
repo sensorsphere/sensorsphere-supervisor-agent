@@ -3,10 +3,10 @@ import path from "node:path";
 export interface SupervisorConfig {
   socketPath: string;
   socketGid: number;
-  managedAgentInstallDir: string;
-  managedImage: string;
-  composeSourceUrlTemplate: string;
-  updateTimeoutMs: number;
+  managedRoot: string;
+  defaultPuid: number;
+  defaultPgid: number;
+  operationTimeoutMs: number;
 }
 
 function required(name: string, value: string | undefined): string {
@@ -23,19 +23,15 @@ function parseInteger(name: string, value: string | undefined, fallback: number)
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConfig {
-  const installDir = required("SUPERVISOR_MANAGED_AGENT_INSTALL_DIR", env.SUPERVISOR_MANAGED_AGENT_INSTALL_DIR);
-  if (!path.isAbsolute(installDir)) throw new Error("SUPERVISOR_MANAGED_AGENT_INSTALL_DIR must be absolute");
-
-  const template = env.SUPERVISOR_COMPOSE_SOURCE_URL_TEMPLATE?.trim()
-    || "https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-agent/v{version}/docker-compose.yml";
-  if (!template.includes("{version}")) throw new Error("SUPERVISOR_COMPOSE_SOURCE_URL_TEMPLATE must contain {version}");
+  const managedRoot = required("SUPERVISOR_MANAGED_ROOT", env.SUPERVISOR_MANAGED_ROOT);
+  if (!path.isAbsolute(managedRoot)) throw new Error("SUPERVISOR_MANAGED_ROOT must be absolute");
 
   return {
     socketPath: env.SUPERVISOR_SOCKET_PATH?.trim() || "/run/sensorsphere-supervisor-agent/supervisor.sock",
     socketGid: parseInteger("SUPERVISOR_SOCKET_GID", env.SUPERVISOR_SOCKET_GID, 0),
-    managedAgentInstallDir: path.resolve(installDir),
-    managedImage: env.SUPERVISOR_MANAGED_IMAGE?.trim() || "ghcr.io/sensorsphere/sensorsphere-device-agent",
-    composeSourceUrlTemplate: template,
-    updateTimeoutMs: parseInteger("SUPERVISOR_UPDATE_TIMEOUT_MS", env.SUPERVISOR_UPDATE_TIMEOUT_MS, 120_000),
+    managedRoot: path.resolve(managedRoot),
+    defaultPuid: parseInteger("SUPERVISOR_DEFAULT_PUID", env.SUPERVISOR_DEFAULT_PUID, 1000),
+    defaultPgid: parseInteger("SUPERVISOR_DEFAULT_PGID", env.SUPERVISOR_DEFAULT_PGID, 1000),
+    operationTimeoutMs: parseInteger("SUPERVISOR_OPERATION_TIMEOUT_MS", env.SUPERVISOR_OPERATION_TIMEOUT_MS, 120_000),
   };
 }

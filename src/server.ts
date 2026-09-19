@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { SupervisorConfig } from "./config.js";
-import type { DeviceAgentManager } from "./manager.js";
+import type { ManagedAgentManager } from "./manager.js";
 import { parseRequest, type SupervisorResponse } from "./protocol.js";
 
-export async function startServer(config: SupervisorConfig, manager: DeviceAgentManager): Promise<net.Server> {
+export async function startServer(config: SupervisorConfig, manager: ManagedAgentManager): Promise<net.Server> {
   await fs.mkdir(path.dirname(config.socketPath), { recursive: true });
   await fs.rm(config.socketPath, { force: true });
 
@@ -34,16 +34,29 @@ export async function startServer(config: SupervisorConfig, manager: DeviceAgent
   return server;
 }
 
-async function handleLine(line: string, socket: net.Socket, manager: DeviceAgentManager): Promise<void> {
+async function handleLine(line: string, socket: net.Socket, manager: ManagedAgentManager): Promise<void> {
   let requestId = "unknown";
-  let action: "GET_STATUS" | "UPDATE_AGENT" = "GET_STATUS";
+  let action: SupervisorResponse["action"] = "GET_STATUS";
   try {
     const request = parseRequest(line);
     requestId = request.request_id;
     action = request.action;
-    const result = request.action === "GET_STATUS"
-      ? await manager.getStatus()
-      : await manager.update(request.version!);
+    let result: unknown;
+    switch (request.action) {
+      case "GET_STATUS":
+        result = await manager.getStatus(request.agent_type ?? "device-agent", request.instance ?? "main");
+        break;
+      case "DEPLOY_AGENT":
+        result = await manager.deploy(request.agent_type!, request.instance ?? "main", request.version!, request.environment ?? {});
+        break;
+      case "UPDATE_AGENT":
+        // Backward compatibility: Device Agent 1.2.x sends UPDATE_AGENT without an explicit target.
+        result = await manager.update(request.version!, request.agent_type ?? "device-agent", request.instance ?? "main");
+        break;
+      case "REMOVE_AGENT":
+        result = await manager.remove(request.agent_type!, request.instance ?? "main");
+        break;
+    }
     const response: SupervisorResponse = { request_id: requestId, ok: true, action, result };
     socket.write(`${JSON.stringify(response)}\n`);
   } catch (error) {

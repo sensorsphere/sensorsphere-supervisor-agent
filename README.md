@@ -1,48 +1,111 @@
 # SensorSphere Supervisor Agent
 
-SensorSphere Supervisor Agent is a small host-local lifecycle service used to update a SensorSphere Device Agent without giving the Device Agent direct access to the Docker daemon.
+SensorSphere Supervisor Agent is the host-local lifecycle service for known SensorSphere agents. It owns Docker lifecycle access so managed agents never need direct access to the Docker daemon.
 
-## Scope of 0.1.0
+## Scope of 0.2.0
 
-- Unix-domain socket API; no TCP listener.
-- `GET_STATUS` for the locally managed Device Agent.
-- `UPDATE_AGENT` with a version only; arbitrary images and shell commands are not accepted.
-- Pull/recreate of the `device-agent` Compose service.
-- Retrieval of the target version's `docker-compose.yml` from the fixed SensorSphere Device Agent repository.
-- Preservation of the managed `.env`.
-- Automatic restoration of `.env` and `docker-compose.yml` when an update operation fails.
-- The Docker socket is mounted only into the Supervisor Agent, never into the Device Agent.
+The Supervisor is now provider-neutral across known SensorSphere agent types:
 
-The first release is intentionally local-only. SensorSphere/API orchestration and the Device Agent client are added in later PRs.
+- `device-agent`
+- `monitor-agent`
+- multiple named instances per type (`main`, `i2`, `site-b`, ...)
+
+Supported local operations are:
+
+- `GET_STATUS`
+- `DEPLOY_AGENT`
+- `UPDATE_AGENT`
+- `REMOVE_AGENT`
+
+Arbitrary image names, Compose repositories, install paths, environment keys, or shell commands are never accepted from callers. Each supported agent type is defined by a local allowlist in the Supervisor.
+
+`UPDATE_AGENT` and `GET_STATUS` without an explicit target continue to mean `device-agent/main` so Device Agent 1.2.x remains compatible.
+
+## Managed layout
+
+`SUPERVISOR_MANAGED_ROOT` is an absolute host directory mounted at the same path in the Supervisor container. Target directories are derived locally:
+
+```text
+<root>/sensorsphere-device-agent
+<root>/sensorsphere-monitor-agent
+<root>/sensorsphere-monitor-agent-i2
+<root>/sensorsphere-monitor-agent-site-b
+```
+
+Callers cannot provide filesystem paths.
+
+For an existing installation such as `/home/pi/sensorsphere-device-agent`, set:
+
+```text
+SUPERVISOR_MANAGED_ROOT=/home/pi
+```
 
 ## Local protocol
 
 Requests and responses are one JSON object per line over the Unix socket.
 
-Status request:
+Legacy Device Agent status request:
 
 ```json
 {"request_id":"1","action":"GET_STATUS"}
 ```
 
-Update request:
+Target-aware status:
 
 ```json
-{"request_id":"2","action":"UPDATE_AGENT","version":"1.1.1"}
+{"request_id":"2","action":"GET_STATUS","agent_type":"monitor-agent","instance":"i2"}
 ```
 
-The caller can supply only a version. The managed image name, installation directory, Compose source repository, and Docker operations are defined locally by Supervisor configuration.
+Deploy a known agent/version:
+
+```json
+{
+  "request_id":"3",
+  "action":"DEPLOY_AGENT",
+  "agent_type":"monitor-agent",
+  "instance":"main",
+  "version":"1.0.9",
+  "environment":{
+    "SENSORSPHERE_URL":"http://100.64.0.8:8080",
+    "SENSORSPHERE_AGENT_TOKEN":"replace_me",
+    "AGENT_NAME":"monitor-rpi4"
+  }
+}
+```
+
+Update a named instance:
+
+```json
+{"request_id":"4","action":"UPDATE_AGENT","agent_type":"monitor-agent","instance":"i2","version":"1.0.9"}
+```
+
+Remove an instance:
+
+```json
+{"request_id":"5","action":"REMOVE_AGENT","agent_type":"monitor-agent","instance":"i2"}
+```
+
+Removal stops the Compose project and renames the installation directory to a timestamped `.removed-*` archive instead of deleting its configuration/data.
+
+## Deployment security
+
+For a new deployment, the caller may provide only environment keys explicitly allowed for that known agent type. Required SensorSphere URL/token settings must be present. Newline-containing values are rejected. The Supervisor itself chooses:
+
+- GHCR image repository
+- Compose source repository
+- Compose service name
+- installation directory
+
+The generated `.env` is mode `0600`.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and adjust at least:
+Copy `.env.example` to `.env` and configure at least:
 
 ```text
-DEVICE_AGENT_INSTALL_DIR=/home/pi/sensorsphere-device-agent
+SUPERVISOR_MANAGED_ROOT=/home/pi
 SUPERVISOR_SOCKET_GID=1000
 ```
-
-`DEVICE_AGENT_INSTALL_DIR` must be the absolute host path of the existing Device Agent installation. The directory is mounted into the Supervisor container at the same absolute path so relative Compose bind mounts continue to resolve to valid host paths.
 
 ## Start
 
@@ -53,8 +116,6 @@ docker compose --env-file .env up -d
 
 ## Tests
 
-The project is intended to be built and tested in Docker:
-
 ```sh
 docker build --target build -t sensorsphere-supervisor-agent:test .
 docker run --rm sensorsphere-supervisor-agent:test npm test
@@ -62,7 +123,7 @@ docker run --rm sensorsphere-supervisor-agent:test npm test
 
 ## Release
 
-`VERSION` is the authoritative image version. Publishing follows the same multi-architecture convention as the Device Agent:
+`VERSION` is authoritative:
 
 ```sh
 IMAGE_NAMESPACE=sensorsphere ./scripts/release-image.sh
