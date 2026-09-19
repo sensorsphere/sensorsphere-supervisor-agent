@@ -1,4 +1,4 @@
-export type SupervisorAction = "GET_STATUS" | "DEPLOY_AGENT" | "UPDATE_AGENT" | "REMOVE_AGENT" | "GET_SELF_STATUS" | "UPDATE_SELF";
+export type SupervisorAction = "LIST_AGENTS" | "GET_STATUS" | "DEPLOY_AGENT" | "UPDATE_AGENT" | "REMOVE_AGENT" | "GET_SELF_STATUS" | "UPDATE_SELF";
 export type ManagedAgentType = "device-agent" | "monitor-agent";
 
 export interface SupervisorRequest {
@@ -18,7 +18,7 @@ export interface SupervisorResponse {
   error?: string;
 }
 
-const ACTIONS = new Set<SupervisorAction>(["GET_STATUS", "DEPLOY_AGENT", "UPDATE_AGENT", "REMOVE_AGENT", "GET_SELF_STATUS", "UPDATE_SELF"]);
+const ACTIONS = new Set<SupervisorAction>(["LIST_AGENTS", "GET_STATUS", "DEPLOY_AGENT", "UPDATE_AGENT", "REMOVE_AGENT", "GET_SELF_STATUS", "UPDATE_SELF"]);
 const AGENT_TYPES = new Set<ManagedAgentType>(["device-agent", "monitor-agent"]);
 
 export function parseRequest(line: string): SupervisorRequest {

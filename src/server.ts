@@ -44,6 +44,9 @@ async function handleLine(line: string, socket: net.Socket, manager: ManagedAgen
     action = request.action;
     let result: unknown;
     switch (request.action) {
+      case "LIST_AGENTS":
+        result = await manager.listStatuses();
+        break;
       case "GET_STATUS":
         result = await manager.getStatus(request.agent_type ?? "device-agent", request.instance ?? "main");
         break;

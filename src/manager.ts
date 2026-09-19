@@ -283,6 +283,28 @@ export class ManagedAgentManager {
     }
   }
 
+  async listStatuses(): Promise<ManagedStatus[]> {
+    const entries = await fs.readdir(this.config.managedRoot, { withFileTypes: true });
+    const targets: Array<{ agentType: ManagedAgentType; instance: string }> = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.includes(".removed-") || entry.name.includes(".failed-deploy-")) continue;
+      for (const definition of Object.values(DEFINITIONS)) {
+        if (entry.name === definition.directoryName) {
+          targets.push({ agentType: definition.type, instance: "main" });
+          continue;
+        }
+        const prefix = `${definition.directoryName}-`;
+        if (!entry.name.startsWith(prefix)) continue;
+        const instance = entry.name.slice(prefix.length);
+        if (INSTANCE_RE.test(instance)) targets.push({ agentType: definition.type, instance });
+      }
+    }
+    const unique = new Map(targets.map(target => [`${target.agentType}/${target.instance}`, target]));
+    const statuses = await Promise.all([...unique.values()].map(target => this.getStatus(target.agentType, target.instance)));
+    return statuses.sort((left, right) => `${left.agent_type}/${left.instance}`.localeCompare(`${right.agent_type}/${right.instance}`));
+  }
+
   async getStatus(agentType: ManagedAgentType = "device-agent", instance = "main"): Promise<ManagedStatus> {
     const target = this.target(agentType, instance);
     const paths = this.paths(target);
