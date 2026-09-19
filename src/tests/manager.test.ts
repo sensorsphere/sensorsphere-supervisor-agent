@@ -70,3 +70,13 @@ test("update restores environment and compose when recreation fails", async () =
   assert.match(env, /DEVICE_AGENT_IMAGE=ghcr\.io\/sensorsphere\/sensorsphere-device-agent:1\.1\.0/);
   assert.match(compose, /image: test/);
 });
+
+test("download failures include the resolved compose URL", async () => {
+  const { config, runner } = await fixture();
+  const failingFetch: typeof fetch = async () => new Response("not found", { status: 404 });
+  const manager = new DeviceAgentManager(config, runner, failingFetch);
+  await assert.rejects(
+    () => manager.update("1.1.1"),
+    /HTTP 404 URL=https:\/\/example\.invalid\/v1\.1\.1\/docker-compose\.yml/,
+  );
+});

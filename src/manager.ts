@@ -131,7 +131,7 @@ export class DeviceAgentManager {
 
       const sourceUrl = this.config.composeSourceUrlTemplate.replace("{version}", normalizedVersion);
       const response = await this.fetchImpl(sourceUrl, { redirect: "follow" });
-      if (!response.ok) throw new Error(`failed to download target docker-compose.yml: HTTP ${response.status}`);
+      if (!response.ok) throw new Error(`failed to download target docker-compose.yml: HTTP ${response.status} URL=${sourceUrl}`);
       const composeBody = await response.text();
       if (!composeBody.includes("device-agent:")) throw new Error("target docker-compose.yml does not define device-agent service");
       await fs.writeFile(composeTemp, composeBody.endsWith("\n") ? composeBody : `${composeBody}\n`, "utf8");
