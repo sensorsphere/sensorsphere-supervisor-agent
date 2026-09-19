@@ -1,0 +1,17 @@
+services:
+  supervisor-agent:
+    image: "${SUPERVISOR_AGENT_IMAGE:-ghcr.io/sensorsphere/sensorsphere-supervisor-agent:latest}"
+    restart: unless-stopped
+    environment:
+      SUPERVISOR_SOCKET_PATH: "${SUPERVISOR_SOCKET_PATH:-/run/sensorsphere-supervisor-agent/supervisor.sock}"
+      SUPERVISOR_SOCKET_GID: "${SUPERVISOR_SOCKET_GID:-0}"
+      SUPERVISOR_MANAGED_AGENT_INSTALL_DIR: "${DEVICE_AGENT_INSTALL_DIR}"
+      SUPERVISOR_MANAGED_IMAGE: "${SUPERVISOR_MANAGED_IMAGE:-ghcr.io/sensorsphere/sensorsphere-device-agent}"
+      SUPERVISOR_COMPOSE_SOURCE_URL_TEMPLATE: "${SUPERVISOR_COMPOSE_SOURCE_URL_TEMPLATE:-https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-agent/v{version}/docker-compose.yml}"
+      SUPERVISOR_UPDATE_TIMEOUT_MS: "${SUPERVISOR_UPDATE_TIMEOUT_MS:-120000}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "${SUPERVISOR_SOCKET_DIR:-/run/sensorsphere-supervisor-agent}:/run/sensorsphere-supervisor-agent"
+      # The managed directory is mounted at the same absolute path inside the
+      # supervisor so Docker Compose resolves relative bind mounts for the host correctly.
+      - "${DEVICE_AGENT_INSTALL_DIR}:${DEVICE_AGENT_INSTALL_DIR}"

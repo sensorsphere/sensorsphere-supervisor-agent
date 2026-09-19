@@ -1,0 +1,21 @@
+{
+  "name": "sensorsphere-supervisor-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SensorSphere local lifecycle supervisor for managed agents",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "npm run build && node --test dist/tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.20"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
