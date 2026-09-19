@@ -38,3 +38,19 @@ test("parseRequest accepts target-aware monitor deployment", () => {
     },
   );
 });
+
+test("parseRequest accepts Supervisor self status and update actions", () => {
+  assert.deepEqual(parseRequest('{"request_id":"self-1","action":"GET_SELF_STATUS"}'), {
+    request_id: "self-1",
+    action: "GET_SELF_STATUS",
+  });
+  assert.deepEqual(parseRequest('{"request_id":"self-2","action":"UPDATE_SELF","version":"0.3.1"}'), {
+    request_id: "self-2",
+    action: "UPDATE_SELF",
+    version: "0.3.1",
+  });
+  assert.throws(
+    () => parseRequest('{"request_id":"self-3","action":"UPDATE_SELF"}'),
+    /version is required/,
+  );
+});

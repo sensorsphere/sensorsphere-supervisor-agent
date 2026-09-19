@@ -35,6 +35,9 @@ async function fixture(): Promise<{ root: string; config: SupervisorConfig; runn
       defaultPuid: 0,
       defaultPgid: 0,
       operationTimeoutMs: 1000,
+      selfInstallDir: path.join(root, "sensorsphere-supervisor-agent"),
+      selfUpdateStatusFile: path.join(root, "sensorsphere-supervisor-agent", ".supervisor-update-status.json"),
+      selfUpdateTimeoutMs: 1000,
     },
     runner: new FakeRunner(),
   };

@@ -1,4 +1,4 @@
-export type SupervisorAction = "GET_STATUS" | "DEPLOY_AGENT" | "UPDATE_AGENT" | "REMOVE_AGENT";
+export type SupervisorAction = "GET_STATUS" | "DEPLOY_AGENT" | "UPDATE_AGENT" | "REMOVE_AGENT" | "GET_SELF_STATUS" | "UPDATE_SELF";
 export type ManagedAgentType = "device-agent" | "monitor-agent";
 
 export interface SupervisorRequest {
@@ -18,7 +18,7 @@ export interface SupervisorResponse {
   error?: string;
 }
 
-const ACTIONS = new Set<SupervisorAction>(["GET_STATUS", "DEPLOY_AGENT", "UPDATE_AGENT", "REMOVE_AGENT"]);
+const ACTIONS = new Set<SupervisorAction>(["GET_STATUS", "DEPLOY_AGENT", "UPDATE_AGENT", "REMOVE_AGENT", "GET_SELF_STATUS", "UPDATE_SELF"]);
 const AGENT_TYPES = new Set<ManagedAgentType>(["device-agent", "monitor-agent"]);
 
 export function parseRequest(line: string): SupervisorRequest {
@@ -40,7 +40,7 @@ export function parseRequest(line: string): SupervisorRequest {
   if ((raw.action === "DEPLOY_AGENT" || raw.action === "REMOVE_AGENT") && !raw.agent_type) {
     throw new Error(`agent_type is required for ${raw.action}`);
   }
-  if ((raw.action === "DEPLOY_AGENT" || raw.action === "UPDATE_AGENT")
+  if ((raw.action === "DEPLOY_AGENT" || raw.action === "UPDATE_AGENT" || raw.action === "UPDATE_SELF")
       && (typeof raw.version !== "string" || raw.version.trim() === "")) {
     throw new Error(`version is required for ${raw.action}`);
   }
