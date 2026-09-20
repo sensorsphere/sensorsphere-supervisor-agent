@@ -2,9 +2,9 @@
 
 SensorSphere Supervisor Agent is the host-local lifecycle service for known SensorSphere agents. It owns Docker lifecycle access so managed agents never need direct access to the Docker daemon.
 
-## Scope of 0.3.1
+## Scope of 0.4.0
 
-0.3.1 is the first maintenance release used to validate the complete SensorSphere-driven self-update path introduced in 0.3.0. It keeps the same supported lifecycle surface and security model.
+0.4.0 provides the generic host-local lifecycle service used by SensorSphere to manage known Device and Monitor Agent instances and to self-update the Supervisor.
 
 The Supervisor is provider-neutral across known SensorSphere agent types:
 
@@ -24,6 +24,47 @@ Supported local operations are:
 Arbitrary image names, Compose repositories, install paths, environment keys, or shell commands are never accepted from callers. Each supported agent type is defined by a local allowlist in the Supervisor.
 
 `UPDATE_AGENT` and `GET_STATUS` without an explicit target continue to mean `device-agent/main` so Device Agent 1.2.x remains compatible.
+
+## Quick install
+
+The recommended bootstrap does not require cloning this repository. Install the current release with:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-supervisor-agent/master/scripts/install.sh | VERSION=0.4.0 bash
+```
+
+The installer defaults to:
+
+```text
+install directory:  $HOME/sensorsphere-supervisor-agent
+managed root:       $HOME
+socket:             /run/sensorsphere-supervisor-agent/supervisor.sock
+UID/GID defaults:   current user
+```
+
+It downloads the Compose file and `.env.example` for the requested release, creates or migrates `.env`, updates the selected image tag, validates the Compose configuration, pulls/recreates the service, and waits for the Unix socket. Existing `.env` files are backed up and custom values are preserved; missing required variables are added automatically.
+
+Verify installation with:
+
+```sh
+cd ~/sensorsphere-supervisor-agent
+docker compose --env-file .env ps
+docker compose --env-file .env logs --tail=100 supervisor-agent
+test -S /run/sensorsphere-supervisor-agent/supervisor.sock && echo "Supervisor socket OK"
+```
+
+### Why there is no SensorSphere token
+
+The Supervisor does not connect to SensorSphere and does not expose a TCP management API. Local agents communicate with it only through the Unix socket. Access is therefore controlled by host filesystem/socket permissions and `SUPERVISOR_SOCKET_GID`, while the Supervisor itself restricts callers to a fixed allowlist of known agent types and lifecycle operations. Do not expose the Supervisor socket over the network.
+
+### Legacy Device Agent bootstrap
+
+If a host still runs a Device Agent version that predates Supervisor integration:
+
+1. Install Supervisor Agent first.
+2. Perform one manual Device Agent upgrade using the Device Agent `scripts/install.sh`.
+3. Verify that the upgraded Device Agent sees `/run/sensorsphere-supervisor-agent/supervisor.sock`.
+4. Use SensorSphere-managed updates for later versions.
 
 ## Managed layout
 
@@ -133,9 +174,9 @@ For a new deployment, the caller may provide only environment keys explicitly al
 
 The generated `.env` is mode `0600`.
 
-## Configuration
+## Manual configuration and start
 
-Copy `.env.example` to `.env` and configure at least:
+The installer is preferred. For a manual deployment, copy `.env.example` to `.env` and configure at least the managed root and socket group for the target host:
 
 ```text
 SUPERVISOR_MANAGED_ROOT=/home/pi
@@ -144,12 +185,14 @@ SUPERVISOR_SELF_INSTALL_DIR=/home/pi/sensorsphere-supervisor-agent
 SUPERVISOR_SELF_UPDATE_TIMEOUT_MS=120000
 ```
 
-## Start
+Then start with:
 
 ```sh
 docker compose --env-file .env pull
 docker compose --env-file .env up -d
 ```
+
+To repeat a manual installer-driven update, rerun `scripts/install.sh` with a new `VERSION`. The existing `.env` is backed up and preserved, missing required variables are migrated, and the image tag is updated before `docker compose pull` and `docker compose up -d`.
 
 ## Tests
 
