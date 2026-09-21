@@ -214,6 +214,8 @@ SUPERVISOR_SELF_INSTALL_DIR=/home/pi/sensorsphere-supervisor-agent
 SUPERVISOR_SELF_UPDATE_TIMEOUT_MS=120000
 ```
 
+`scripts/install.sh` also records the host OS hostname in `SUPERVISOR_HOSTNAME` and passes it as the container hostname. This keeps the hostname reported to SensorSphere independent from Docker container IDs. `SUPERVISOR_NAME` remains the operator-facing name reported by the Supervisor.
+
 Then start with:
 
 ```sh

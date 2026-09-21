@@ -1,6 +1,7 @@
 services:
   supervisor-agent:
     image: "${SUPERVISOR_AGENT_IMAGE:-ghcr.io/sensorsphere/sensorsphere-supervisor-agent:latest}"
+    hostname: "${SUPERVISOR_HOSTNAME:-sensorsphere-supervisor-agent}"
     restart: unless-stopped
     environment:
       SENSORSPHERE_URL: "${SENSORSPHERE_URL:-}"
