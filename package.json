@@ -1,6 +1,6 @@
 {
   "name": "sensorsphere-supervisor-agent",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "SensorSphere local lifecycle supervisor for managed agents",
   "type": "module",
@@ -16,6 +16,10 @@
   "devDependencies": {
     "@types/node": "^24.3.1",
     "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "@types/ws": "^8.18.1"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
   }
 }

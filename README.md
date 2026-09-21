@@ -66,6 +66,35 @@ If a host still runs a Device Agent version that predates Supervisor integration
 3. Verify that the upgraded Device Agent sees `/run/sensorsphere-supervisor-agent/supervisor.sock`.
 4. Use SensorSphere-managed updates for later versions.
 
+
+## Direct SensorSphere connection (0.5.0+)
+
+The Supervisor can now connect directly and outbound-only to SensorSphere. This removes the bootstrap dependency on a Device Agent: a new host can run only the Supervisor first, appear in `Agents > Supervisor Agents`, then receive Device/Monitoring Agent deployments from SensorSphere in a later control increment.
+
+Create a Supervisor Agent entry/token in SensorSphere and configure:
+
+For a new host, the recommended bootstrap is:
+
+```sh
+SENSORSPHERE_URL=http://100.64.0.8:8080 \
+SENSORSPHERE_AGENT_TOKEN=sssa_replace_me \
+SUPERVISOR_NAME=homefcs-iot-ap \
+VERSION=0.5.0 \
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-supervisor-agent/master/scripts/install.sh)"
+```
+
+The installer downloads the version-matched Compose file, preserves/migrates an existing `.env`, updates the image tag, starts the container and validates the Unix socket.
+
+The equivalent `.env` values are:
+
+```env
+SENSORSPHERE_URL=http://100.64.0.8:8080
+SENSORSPHERE_AGENT_TOKEN=sssa_replace_me
+SUPERVISOR_NAME=homefcs-iot-ap
+```
+
+If `SENSORSPHERE_URL` or `SENSORSPHERE_AGENT_TOKEN` is omitted, the existing local Unix-socket mode remains available for backward compatibility. No inbound TCP port is opened.
+
 ## Managed layout
 
 `SUPERVISOR_MANAGED_ROOT` is an absolute host directory mounted at the same path in the Supervisor container. Target directories are derived locally:

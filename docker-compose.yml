@@ -3,6 +3,10 @@ services:
     image: "${SUPERVISOR_AGENT_IMAGE:-ghcr.io/sensorsphere/sensorsphere-supervisor-agent:latest}"
     restart: unless-stopped
     environment:
+      SENSORSPHERE_URL: "${SENSORSPHERE_URL:-}"
+      SENSORSPHERE_AGENT_TOKEN: "${SENSORSPHERE_AGENT_TOKEN:-}"
+      SUPERVISOR_NAME: "${SUPERVISOR_NAME:-}"
+      SENSORSPHERE_HEARTBEAT_INTERVAL_MS: "${SENSORSPHERE_HEARTBEAT_INTERVAL_MS:-30000}"
       SUPERVISOR_SOCKET_PATH: "${SUPERVISOR_SOCKET_PATH:-/run/sensorsphere-supervisor-agent/supervisor.sock}"
       SUPERVISOR_SOCKET_GID: "${SUPERVISOR_SOCKET_GID:-0}"
       SUPERVISOR_MANAGED_ROOT: "${SUPERVISOR_MANAGED_ROOT}"

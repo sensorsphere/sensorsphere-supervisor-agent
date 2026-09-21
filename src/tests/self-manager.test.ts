@@ -46,6 +46,10 @@ async function fixture(): Promise<{ root: string; installDir: string; config: Su
     selfInstallDir: installDir,
     selfUpdateStatusFile: path.join(installDir, ".supervisor-update-status.json"),
     selfUpdateTimeoutMs: 1000,
+    sensorsphereUrl: null,
+    sensorsphereAgentToken: null,
+    supervisorName: null,
+    sensorsphereHeartbeatIntervalMs: 30_000,
   };
   return { root, installDir, config, runner: new FakeRunner() };
 }

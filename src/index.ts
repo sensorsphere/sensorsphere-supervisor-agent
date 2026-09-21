@@ -4,6 +4,7 @@ import { ManagedAgentManager } from "./manager.js";
 import { ExecCommandRunner } from "./runner.js";
 import { startServer } from "./server.js";
 import { SelfUpdateManager } from "./self-manager.js";
+import { SensorSphereSupervisorClient } from "./sensorsphere-client.js";
 
 const config = loadConfig();
 const runner = new ExecCommandRunner();
@@ -13,11 +14,15 @@ const version = fs.readFileSync(new URL("../VERSION", import.meta.url), "utf8").
 
 await startServer(config, manager, selfManager);
 
+const sensorsphereClient = new SensorSphereSupervisorClient(config, version, manager, selfManager);
+sensorsphereClient.start();
+
 console.log(JSON.stringify({
   version,
   socket_path: config.socketPath,
   managed_root: config.managedRoot,
   managed_agent_types: ["device-agent", "monitor-agent"],
   self_update: true,
+  direct_sensorsphere_connection: Boolean(config.sensorsphereUrl && config.sensorsphereAgentToken),
   message: "SensorSphere Supervisor Agent started",
 }));

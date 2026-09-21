@@ -10,6 +10,10 @@ export interface SupervisorConfig {
   selfInstallDir: string;
   selfUpdateStatusFile: string;
   selfUpdateTimeoutMs: number;
+  sensorsphereUrl: string | null;
+  sensorsphereAgentToken: string | null;
+  supervisorName: string | null;
+  sensorsphereHeartbeatIntervalMs: number;
 }
 
 function required(name: string, value: string | undefined): string {
@@ -44,5 +48,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     selfInstallDir,
     selfUpdateStatusFile: path.join(selfInstallDir, ".supervisor-update-status.json"),
     selfUpdateTimeoutMs: parseInteger("SUPERVISOR_SELF_UPDATE_TIMEOUT_MS", env.SUPERVISOR_SELF_UPDATE_TIMEOUT_MS, 120_000),
+    sensorsphereUrl: env.SENSORSPHERE_URL?.trim() || null,
+    sensorsphereAgentToken: env.SENSORSPHERE_AGENT_TOKEN?.trim() || null,
+    supervisorName: env.SUPERVISOR_NAME?.trim() || null,
+    sensorsphereHeartbeatIntervalMs: parseInteger("SENSORSPHERE_HEARTBEAT_INTERVAL_MS", env.SENSORSPHERE_HEARTBEAT_INTERVAL_MS, 30_000),
   };
 }

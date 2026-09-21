@@ -15,5 +15,6 @@ LABEL org.opencontainers.image.source="https://github.com/sensorsphere/sensorsph
 RUN apk add --no-cache nodejs docker-cli docker-cli-compose
 WORKDIR /app
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/node_modules ./node_modules
 COPY VERSION ./VERSION
 ENTRYPOINT ["node", "dist/index.js"]
