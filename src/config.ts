@@ -4,6 +4,7 @@ export interface SupervisorConfig {
   socketPath: string;
   socketGid: number;
   managedRoot: string;
+  additionalManagedRoot: string | null;
   defaultPuid: number;
   defaultPgid: number;
   operationTimeoutMs: number;
@@ -34,6 +35,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
   if (!path.isAbsolute(managedRoot)) throw new Error("SUPERVISOR_MANAGED_ROOT must be absolute");
 
   const resolvedManagedRoot = path.resolve(managedRoot);
+  const additionalManagedRootValue = env.SUPERVISOR_ADDITIONAL_MANAGED_ROOT?.trim() || "/opt";
+  if (!path.isAbsolute(additionalManagedRootValue)) throw new Error("SUPERVISOR_ADDITIONAL_MANAGED_ROOT must be absolute");
+  const additionalManagedRoot = path.resolve(additionalManagedRootValue) === resolvedManagedRoot ? null : path.resolve(additionalManagedRootValue);
   const selfInstallDir = path.resolve(env.SUPERVISOR_SELF_INSTALL_DIR?.trim() || path.join(resolvedManagedRoot, "sensorsphere-supervisor-agent"));
   const selfRelative = path.relative(resolvedManagedRoot, selfInstallDir);
   if (selfRelative.startsWith("..") || path.isAbsolute(selfRelative)) throw new Error("SUPERVISOR_SELF_INSTALL_DIR must be inside SUPERVISOR_MANAGED_ROOT");
@@ -42,6 +46,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     socketPath: env.SUPERVISOR_SOCKET_PATH?.trim() || "/run/sensorsphere-supervisor-agent/supervisor.sock",
     socketGid: parseInteger("SUPERVISOR_SOCKET_GID", env.SUPERVISOR_SOCKET_GID, 0),
     managedRoot: resolvedManagedRoot,
+    additionalManagedRoot,
     defaultPuid: parseInteger("SUPERVISOR_DEFAULT_PUID", env.SUPERVISOR_DEFAULT_PUID, 1000),
     defaultPgid: parseInteger("SUPERVISOR_DEFAULT_PGID", env.SUPERVISOR_DEFAULT_PGID, 1000),
     operationTimeoutMs: parseInteger("SUPERVISOR_OPERATION_TIMEOUT_MS", env.SUPERVISOR_OPERATION_TIMEOUT_MS, 120_000),

@@ -2,7 +2,7 @@
 
 SensorSphere Supervisor Agent is the host-local lifecycle service for known SensorSphere agents. It owns Docker lifecycle access so managed agents never need direct access to the Docker daemon.
 
-## Scope of 0.4.0
+## Scope of 0.6.0
 
 0.4.0 provides the generic host-local lifecycle service used by SensorSphere to manage known Device and Monitor Agent instances and to self-update the Supervisor.
 
@@ -79,7 +79,7 @@ For a new host, the recommended bootstrap is:
 SENSORSPHERE_URL=http://100.64.0.8:8080 \
 SENSORSPHERE_AGENT_TOKEN=sssa_replace_me \
 SUPERVISOR_NAME=homefcs-iot-ap \
-VERSION=0.5.0 \
+VERSION=0.6.0 \
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-supervisor-agent/master/scripts/install.sh)"
 ```
 
@@ -94,6 +94,12 @@ SUPERVISOR_NAME=homefcs-iot-ap
 ```
 
 If `SENSORSPHERE_URL` or `SENSORSPHERE_AGENT_TOKEN` is omitted, the existing local Unix-socket mode remains available for backward compatibility. No inbound TCP port is opened.
+
+## Explicit SensorSphere associations
+
+Starting with 0.6.0, SensorSphere can send immutable managed-agent associations to the Supervisor. Each association carries the SensorSphere agent UUID, Supervisor-local instance and an optional explicit install directory. The Supervisor reports the association UUID back with runtime status, so SensorSphere no longer has to infer ownership from hostname or directory naming.
+
+The conventional `SUPERVISOR_MANAGED_ROOT` scan remains available for discovery/adoption. Explicit paths must stay under `SUPERVISOR_MANAGED_ROOT` or `SUPERVISOR_ADDITIONAL_MANAGED_ROOT` (default `/opt`), both mounted at identical host/container paths so Docker Compose relative volumes remain valid.
 
 ## Managed layout
 

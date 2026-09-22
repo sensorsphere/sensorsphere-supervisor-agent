@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import WebSocket from "ws";
 import type { SupervisorConfig } from "./config.js";
-import type { ManagedAgentManager } from "./manager.js";
+import type { ManagedAgentManager, ManagedAssignment } from "./manager.js";
 import type { SelfUpdateManager } from "./self-manager.js";
 
 interface RemoteCommand {
@@ -13,6 +13,17 @@ interface RemoteCommand {
   instance?: string;
   version?: string;
   environment?: Record<string, string>;
+  managementId?: string;
+  agentId?: string;
+  installDir?: string;
+}
+
+interface ManagedAssignmentMessage {
+  id: string;
+  agentType: "device-agent" | "monitor-agent";
+  agentId: string;
+  instance: string;
+  installDir: string | null;
 }
 
 function reportedHostname(): string {
@@ -127,7 +138,16 @@ export class SensorSphereSupervisorClient {
   }
 
   private async handleMessage(text: string): Promise<void> {
-    const message = JSON.parse(text) as { type?: string } & Partial<RemoteCommand>;
+    const message = JSON.parse(text) as { type?: string; managedAssignments?: ManagedAssignmentMessage[] } & Omit<Partial<RemoteCommand>, "type">;
+    if (message.type === "HELLO_ACK" || message.type === "MANAGED_ASSIGNMENTS") {
+      const assignments: ManagedAssignment[] = Array.isArray(message.managedAssignments)
+        ? message.managedAssignments
+            .filter(item => item && typeof item.id === "string" && typeof item.agentId === "string" && (item.agentType === "device-agent" || item.agentType === "monitor-agent") && typeof item.instance === "string")
+            .map(item => ({ id: item.id, agentType: item.agentType, agentId: item.agentId, instance: item.instance, installDir: typeof item.installDir === "string" ? item.installDir : null }))
+        : [];
+      this.manager.setManagedAssignments(assignments);
+      return;
+    }
     if (message.type !== "SUPERVISOR_COMMAND" || !message.commandId || !message.operation) return;
     let result: unknown;
     try {

@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPOSITORY="${REPOSITORY:-sensorsphere/sensorsphere-supervisor-agent}"
 RAW_BASE_URL="${RAW_BASE_URL:-https://raw.githubusercontent.com}"
-VERSION="${VERSION:-0.5.0}"
+VERSION="${VERSION:-0.6.0}"
 MANAGED_ROOT="${SUPERVISOR_MANAGED_ROOT:-${HOME}}"
 INSTALL_DIR="${SUPERVISOR_INSTALL_DIR:-${MANAGED_ROOT}/sensorsphere-supervisor-agent}"
 SOURCE_REF="v${VERSION}"
@@ -54,6 +54,7 @@ ensure_env() {
 
 set_env SUPERVISOR_AGENT_IMAGE "$IMAGE"
 ensure_env SUPERVISOR_MANAGED_ROOT "$MANAGED_ROOT"
+ensure_env SUPERVISOR_ADDITIONAL_MANAGED_ROOT "/opt"
 ensure_env SUPERVISOR_DEFAULT_PUID "$(id -u)"
 ensure_env SUPERVISOR_DEFAULT_PGID "$(id -g)"
 ensure_env SUPERVISOR_SOCKET_DIR "/run/sensorsphere-supervisor-agent"

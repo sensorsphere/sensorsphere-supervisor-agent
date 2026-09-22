@@ -32,6 +32,7 @@ async function fixture(): Promise<{ root: string; config: SupervisorConfig; runn
       socketPath: path.join(root, "supervisor.sock"),
       socketGid: 0,
       managedRoot: root,
+      additionalManagedRoot: null,
       defaultPuid: 0,
       defaultPgid: 0,
       operationTimeoutMs: 1000,
@@ -149,6 +150,24 @@ test("remove archives an installation instead of deleting it", async () => {
   assert.match(String(result.archive_dir), /sensorsphere-device-agent\.removed-/);
   assert.equal(await fs.stat(String(result.archive_dir)).then(() => true), true);
   await assert.rejects(() => fs.stat(path.join(root, "sensorsphere-device-agent")));
+});
+
+test("explicit SensorSphere association can manage an installation outside the conventional directory", async () => {
+  const { root, config, runner } = await fixture();
+  const externalRoot = await fs.mkdtemp(path.join(os.tmpdir(), "supervisor-external-"));
+  config.additionalManagedRoot = externalRoot;
+  const customDir = path.join(externalRoot, "mysensorsphere-device-agent-i1");
+  await fs.mkdir(customDir, { recursive: true });
+  await fs.writeFile(path.join(customDir, ".env"), "DEVICE_AGENT_IMAGE=ghcr.io/sensorsphere/sensorsphere-device-agent:1.8.2\n", "utf8");
+  await fs.writeFile(path.join(customDir, "docker-compose.yml"), "services:\n  device-agent:\n    image: test\n", "utf8");
+  runner.image = "ghcr.io/sensorsphere/sensorsphere-device-agent:1.8.2";
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  manager.setManagedAssignments([{ id: "management-1", agentType: "device-agent", agentId: "agent-1", instance: "i1", installDir: customDir }]);
+  const status = await manager.getStatus("device-agent", "i1");
+  assert.equal(status.management_id, "management-1");
+  assert.equal(status.sensor_sphere_agent_id, "agent-1");
+  assert.equal(status.install_dir, customDir);
+  assert.equal(status.reconciliation_status, "MANAGED");
 });
 
 test("invalid versions and path-like instance names are rejected", async () => {

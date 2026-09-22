@@ -11,6 +11,7 @@ services:
       SUPERVISOR_SOCKET_PATH: "${SUPERVISOR_SOCKET_PATH:-/run/sensorsphere-supervisor-agent/supervisor.sock}"
       SUPERVISOR_SOCKET_GID: "${SUPERVISOR_SOCKET_GID:-0}"
       SUPERVISOR_MANAGED_ROOT: "${SUPERVISOR_MANAGED_ROOT}"
+      SUPERVISOR_ADDITIONAL_MANAGED_ROOT: "${SUPERVISOR_ADDITIONAL_MANAGED_ROOT:-/opt}"
       SUPERVISOR_DEFAULT_PUID: "${SUPERVISOR_DEFAULT_PUID:-1000}"
       SUPERVISOR_DEFAULT_PGID: "${SUPERVISOR_DEFAULT_PGID:-1000}"
       SUPERVISOR_OPERATION_TIMEOUT_MS: "${SUPERVISOR_OPERATION_TIMEOUT_MS:-120000}"
@@ -24,3 +25,6 @@ services:
       # Supervisor so Compose project directories and relative bind mounts resolve
       # identically on the host and in the Supervisor container.
       - "${SUPERVISOR_MANAGED_ROOT}:${SUPERVISOR_MANAGED_ROOT}"
+      # Optional second managed root for explicitly associated installations,
+      # for example /opt/mysensorsphere-device-agent-i1.
+      - "${SUPERVISOR_ADDITIONAL_MANAGED_ROOT:-/opt}:${SUPERVISOR_ADDITIONAL_MANAGED_ROOT:-/opt}"

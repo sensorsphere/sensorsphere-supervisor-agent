@@ -24,6 +24,16 @@ interface ManagedTarget {
   instance: string;
   definition: AgentDefinition;
   installDir: string;
+  managementId: string | null;
+  agentId: string | null;
+}
+
+export interface ManagedAssignment {
+  id: string;
+  agentType: ManagedAgentType;
+  agentId: string;
+  instance: string;
+  installDir: string | null;
 }
 
 interface ManagedPaths {
@@ -84,6 +94,8 @@ const DEFINITIONS: Record<ManagedAgentType, AgentDefinition> = {
 };
 
 export interface ManagedStatus {
+  management_id: string | null;
+  sensor_sphere_agent_id: string | null;
   agent_type: ManagedAgentType;
   instance: string;
   install_dir: string;
@@ -93,6 +105,7 @@ export interface ManagedStatus {
   container_id: string | null;
   container_state: string;
   running_image: string | null;
+  reconciliation_status: "MANAGED" | "MISSING" | "DISCOVERED";
 }
 
 function isNotFound(error: unknown): boolean {
@@ -101,6 +114,7 @@ function isNotFound(error: unknown): boolean {
 
 export class ManagedAgentManager {
   private readonly operationsInProgress = new Set<string>();
+  private assignments = new Map<string, ManagedAssignment>();
 
   constructor(
     private readonly config: SupervisorConfig,
@@ -108,18 +122,50 @@ export class ManagedAgentManager {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
+  private assignmentKey(agentType: ManagedAgentType, instance: string): string {
+    return `${agentType}/${instance}`;
+  }
+
+  setManagedAssignments(assignments: ManagedAssignment[]): void {
+    const next = new Map<string, ManagedAssignment>();
+    for (const assignment of assignments) {
+      const instance = assignment.instance.trim() || "main";
+      if (!INSTANCE_RE.test(instance)) continue;
+      if (!DEFINITIONS[assignment.agentType]) continue;
+      next.set(this.assignmentKey(assignment.agentType, instance), { ...assignment, instance });
+    }
+    this.assignments = next;
+  }
+
+  private isAllowedInstallDir(installDir: string): boolean {
+    const roots = [this.config.managedRoot, this.config.additionalManagedRoot].filter((value): value is string => Boolean(value));
+    return roots.some(root => {
+      const relative = path.relative(root, installDir);
+      return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    });
+  }
+
   private target(agentType: ManagedAgentType = "device-agent", instance = "main"): ManagedTarget {
     const normalizedInstance = instance.trim() || "main";
     if (!INSTANCE_RE.test(normalizedInstance)) throw new Error("invalid instance name");
     const definition = DEFINITIONS[agentType];
     if (!definition) throw new Error("unsupported agent type");
+    const assignment = this.assignments.get(this.assignmentKey(agentType, normalizedInstance));
     const directory = normalizedInstance === "main"
       ? definition.directoryName
       : `${definition.directoryName}-${normalizedInstance}`;
-    const installDir = path.resolve(this.config.managedRoot, directory);
-    const relative = path.relative(this.config.managedRoot, installDir);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("managed target escapes SUPERVISOR_MANAGED_ROOT");
-    return { agentType, instance: normalizedInstance, definition, installDir };
+    const installDir = path.resolve(assignment?.installDir?.trim() || path.join(this.config.managedRoot, directory));
+    if (!this.isAllowedInstallDir(installDir)) {
+      throw new Error(`managed target ${installDir} is outside configured managed roots`);
+    }
+    return {
+      agentType,
+      instance: normalizedInstance,
+      definition,
+      installDir,
+      managementId: assignment?.id ?? null,
+      agentId: assignment?.agentId ?? null,
+    };
   }
 
   private key(target: ManagedTarget): string {
@@ -284,24 +330,41 @@ export class ManagedAgentManager {
   }
 
   async listStatuses(): Promise<ManagedStatus[]> {
-    const entries = await fs.readdir(this.config.managedRoot, { withFileTypes: true });
-    const targets: Array<{ agentType: ManagedAgentType; instance: string }> = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name.includes(".removed-") || entry.name.includes(".failed-deploy-")) continue;
-      for (const definition of Object.values(DEFINITIONS)) {
-        if (entry.name === definition.directoryName) {
-          targets.push({ agentType: definition.type, instance: "main" });
-          continue;
+    const targets = new Map<string, { agentType: ManagedAgentType; instance: string }>();
+    for (const assignment of this.assignments.values()) {
+      targets.set(this.assignmentKey(assignment.agentType, assignment.instance), { agentType: assignment.agentType, instance: assignment.instance });
+    }
+
+    const roots = [this.config.managedRoot, this.config.additionalManagedRoot].filter((value): value is string => Boolean(value));
+    for (const root of roots) {
+      let entries: import("node:fs").Dirent[];
+      try {
+        entries = await fs.readdir(root, { withFileTypes: true });
+      } catch (error) {
+        if (isNotFound(error)) continue;
+        throw error;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name.includes(".removed-") || entry.name.includes(".failed-deploy-")) continue;
+        for (const definition of Object.values(DEFINITIONS)) {
+          let instance: string | null = null;
+          if (entry.name === definition.directoryName) instance = "main";
+          else {
+            const prefix = `${definition.directoryName}-`;
+            if (entry.name.startsWith(prefix)) {
+              const candidate = entry.name.slice(prefix.length);
+              if (INSTANCE_RE.test(candidate)) instance = candidate;
+            }
+          }
+          if (!instance) continue;
+          const key = this.assignmentKey(definition.type, instance);
+          if (!targets.has(key)) targets.set(key, { agentType: definition.type, instance });
         }
-        const prefix = `${definition.directoryName}-`;
-        if (!entry.name.startsWith(prefix)) continue;
-        const instance = entry.name.slice(prefix.length);
-        if (INSTANCE_RE.test(instance)) targets.push({ agentType: definition.type, instance });
       }
     }
-    const unique = new Map(targets.map(target => [`${target.agentType}/${target.instance}`, target]));
-    const statuses = await Promise.all([...unique.values()].map(target => this.getStatus(target.agentType, target.instance)));
+
+    const statuses = await Promise.all([...targets.values()].map(target => this.getStatus(target.agentType, target.instance)));
     return statuses.sort((left, right) => `${left.agent_type}/${left.instance}`.localeCompare(`${right.agent_type}/${right.instance}`));
   }
 
@@ -312,6 +375,8 @@ export class ManagedAgentManager {
     const configuredImage = installed ? await this.readEnvImage(target, paths.env) : null;
     const container = installed ? await this.inspectContainer(target, paths) : { id: null, state: "not_installed", image: null };
     return {
+      management_id: target.managementId,
+      sensor_sphere_agent_id: target.agentId,
       agent_type: target.agentType,
       instance: target.instance,
       install_dir: target.installDir,
@@ -321,6 +386,7 @@ export class ManagedAgentManager {
       container_id: container.id,
       container_state: container.state,
       running_image: container.image,
+      reconciliation_status: target.managementId ? (installed ? "MANAGED" : "MISSING") : "DISCOVERED",
     };
   }
 

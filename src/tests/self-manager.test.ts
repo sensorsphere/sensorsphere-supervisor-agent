@@ -40,6 +40,7 @@ async function fixture(): Promise<{ root: string; installDir: string; config: Su
     socketPath: path.join(root, "run", "supervisor.sock"),
     socketGid: 0,
     managedRoot: root,
+    additionalManagedRoot: null,
     defaultPuid: 0,
     defaultPgid: 0,
     operationTimeoutMs: 1000,
