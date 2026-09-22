@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SupervisorConfig } from "./config.js";
@@ -318,6 +319,66 @@ export class ManagedAgentManager {
     await fs.chown(dataDir, Number(values.PUID), Number(values.PGID));
   }
 
+
+  private async readOwnership(target: ManagedTarget): Promise<{ uid: number; gid: number }> {
+    const envPath = this.paths(target).env;
+    let uid = this.config.defaultPuid;
+    let gid = this.config.defaultPgid;
+    try {
+      const content = await fs.readFile(envPath, "utf8");
+      for (const line of content.split(/\r?\n/)) {
+        const normalized = line.trim();
+        if (normalized.startsWith("PUID=")) {
+          const value = normalized.slice(5).replace(/^["']|["']$/g, "");
+          if (/^\d+$/.test(value)) uid = Number(value);
+        } else if (normalized.startsWith("PGID=")) {
+          const value = normalized.slice(5).replace(/^["']|["']$/g, "");
+          if (/^\d+$/.test(value)) gid = Number(value);
+        }
+      }
+    } catch {
+      // New deployments may not have an environment file yet.
+    }
+    return { uid, gid };
+  }
+
+  private async applyOwnership(target: ManagedTarget, pathsToOwn: string[] = []): Promise<void> {
+    const { uid, gid } = await this.readOwnership(target);
+    const candidates = [target.installDir, path.join(target.installDir, "data"), ...pathsToOwn];
+    for (const candidate of candidates) {
+      try {
+        await fs.chown(candidate, uid, gid);
+      } catch (error) {
+        const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code ?? "") : "";
+        if (code !== "ENOENT") throw error;
+      }
+    }
+  }
+
+  async checkToken(agentType: ManagedAgentType, instance = "main"): Promise<Record<string, unknown>> {
+    const target = this.target(agentType, instance);
+    const envPath = this.paths(target).env;
+    if (!(await this.exists(envPath))) throw new Error(`${this.key(target)} is not installed`);
+    const content = await fs.readFile(envPath, "utf8");
+    const tokenKey = agentType === "device-agent" ? "SENSORSPHERE_DEVICE_AGENT_TOKEN" : "SENSORSPHERE_AGENT_TOKEN";
+    let token: string | null = null;
+    for (const line of content.split(/\r?\n/)) {
+      const match = line.match(new RegExp(`^\\s*(?:export\\s+)?${tokenKey}\\s*=\\s*(.*)$`));
+      if (!match) continue;
+      const raw = match[1]!.trim();
+      token = raw.replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+    }
+    if (!token) throw new Error(`${tokenKey} is not configured for ${this.key(target)}`);
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    return {
+      agent_type: agentType,
+      instance,
+      install_dir: target.installDir,
+      token_hash: tokenHash,
+      token_fingerprint: `${tokenHash.slice(0, 4).toUpperCase()}-${tokenHash.slice(4, 8).toUpperCase()}`
+    };
+  }
+
   private async withOperation<T>(target: ManagedTarget, operation: () => Promise<T>): Promise<T> {
     const key = this.key(target);
     if (this.operationsInProgress.has(key)) throw new Error(`an operation is already in progress for ${key}`);
@@ -410,6 +471,7 @@ export class ManagedAgentManager {
         const composeBody = await this.downloadCompose(target, normalizedVersion);
         await this.writeNewEnvironment(target, normalizedVersion, environment);
         await fs.writeFile(paths.compose, composeBody, "utf8");
+        await this.applyOwnership(target, [paths.env, paths.compose]);
 
         await this.runner.run("docker", this.composeArgs(target, paths, ["config", "--quiet"]), this.config.operationTimeoutMs);
         await this.runner.run("docker", this.composeArgs(target, paths, ["pull", target.definition.serviceName]), this.config.operationTimeoutMs);
@@ -419,7 +481,8 @@ export class ManagedAgentManager {
         const targetImage = `${target.definition.image}:${normalizedVersion}`;
         if (after.state !== "running") throw new Error(`deployed ${this.key(target)} is not running (state=${after.state})`);
         if (after.image !== targetImage) throw new Error(`deployed ${this.key(target)} is running unexpected image ${after.image ?? "unknown"}`);
-        return { ...(await this.getStatus(agentType, instance)), target_version: normalizedVersion };
+        const tokenCheck = await this.checkToken(agentType, instance);
+        return { ...(await this.getStatus(agentType, instance)), target_version: normalizedVersion, token_hash: tokenCheck.token_hash, token_fingerprint: tokenCheck.token_fingerprint };
       } catch (error) {
         try {
           if (await this.exists(paths.env) && await this.exists(paths.compose)) {
@@ -458,6 +521,7 @@ export class ManagedAgentManager {
         await fs.writeFile(composeTemp, await this.downloadCompose(target, normalizedVersion), "utf8");
         await this.replaceEnvImage(target, paths.env, targetImage);
         await fs.rename(composeTemp, paths.compose);
+        await this.applyOwnership(target, [paths.env, paths.compose, envBackup, composeBackup]);
 
         await this.runner.run("docker", this.composeArgs(target, paths, ["config", "--quiet"]), this.config.operationTimeoutMs);
         await this.runner.run("docker", this.composeArgs(target, paths, ["pull", target.definition.serviceName]), this.config.operationTimeoutMs);
@@ -482,6 +546,7 @@ export class ManagedAgentManager {
           try {
             await fs.copyFile(envBackup, paths.env);
             await fs.copyFile(composeBackup, paths.compose);
+            await this.applyOwnership(target, [paths.env, paths.compose]);
             await this.runner.run("docker", this.composeArgs(target, paths, ["pull", target.definition.serviceName]), this.config.operationTimeoutMs);
             await this.runner.run("docker", this.composeArgs(target, paths, ["up", "-d", "--no-deps", target.definition.serviceName]), this.config.operationTimeoutMs);
           } catch (rollbackError) {

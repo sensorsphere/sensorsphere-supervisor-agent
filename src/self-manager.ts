@@ -82,6 +82,7 @@ export class SelfUpdateManager {
     const temp = `${this.config.selfUpdateStatusFile}.tmp`;
     await fs.writeFile(temp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     await fs.rename(temp, this.config.selfUpdateStatusFile);
+    await fs.chown(this.config.selfUpdateStatusFile, this.config.defaultPuid, this.config.defaultPgid);
   }
 
   private async inspectContainer(): Promise<{ id: string | null; state: string; image: string | null }> {
@@ -95,6 +96,25 @@ export class SelfUpdateManager {
     );
     const [state = "unknown", image = ""] = inspect.stdout.trim().split("|", 2);
     return { id, state, image: image || null };
+  }
+
+
+  async ensureInstallOwnership(): Promise<void> {
+    const candidates = [
+      this.config.selfInstallDir,
+      path.join(this.config.selfInstallDir, ".env"),
+      path.join(this.config.selfInstallDir, ".env.example"),
+      path.join(this.config.selfInstallDir, "docker-compose.yml"),
+      this.config.selfUpdateStatusFile
+    ];
+    for (const candidate of candidates) {
+      try {
+        await fs.chown(candidate, this.config.defaultPuid, this.config.defaultPgid);
+      } catch (error) {
+        const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code ?? "") : "";
+        if (code !== "ENOENT") throw error;
+      }
+    }
   }
 
   async getStatus(): Promise<SelfStatus> {

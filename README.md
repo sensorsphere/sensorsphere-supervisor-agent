@@ -2,9 +2,9 @@
 
 SensorSphere Supervisor Agent is the host-local lifecycle service for known SensorSphere agents. It owns Docker lifecycle access so managed agents never need direct access to the Docker daemon.
 
-## Scope of 0.6.0
+## Scope of 0.6.1
 
-0.4.0 provides the generic host-local lifecycle service used by SensorSphere to manage known Device and Monitor Agent instances and to self-update the Supervisor.
+0.6.1 provides the generic host-local lifecycle service used by SensorSphere to manage known Device and Monitor Agent instances and to self-update the Supervisor.
 
 The Supervisor is provider-neutral across known SensorSphere agent types:
 
@@ -30,7 +30,7 @@ Arbitrary image names, Compose repositories, install paths, environment keys, or
 The recommended bootstrap does not require cloning this repository. Install the current release with:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-supervisor-agent/master/scripts/install.sh | VERSION=0.4.0 bash
+curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-supervisor-agent/master/scripts/install.sh | VERSION=0.6.1 bash
 ```
 
 The installer defaults to:
@@ -245,3 +245,10 @@ docker run --rm sensorsphere-supervisor-agent:test npm test
 ```sh
 IMAGE_NAMESPACE=sensorsphere ./scripts/release-image.sh
 ```
+
+
+## Token verification and file ownership
+
+0.6.1 adds a `CHECK_TOKEN` remote operation. SensorSphere can ask the Supervisor to hash the token currently configured for a managed Device or Monitor Agent, or the Supervisor's own runtime token. The raw token is never returned.
+
+Files created or replaced by Supervisor lifecycle operations are restored to the managed agent `PUID` / `PGID` when available, otherwise `SUPERVISOR_DEFAULT_PUID` / `SUPERVISOR_DEFAULT_PGID`. On startup the Supervisor also repairs ownership of its own `.env`, `.env.example`, `docker-compose.yml` and update status file after a self-update.

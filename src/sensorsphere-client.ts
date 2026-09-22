@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import WebSocket from "ws";
@@ -8,7 +9,7 @@ import type { SelfUpdateManager } from "./self-manager.js";
 interface RemoteCommand {
   type: "SUPERVISOR_COMMAND";
   commandId: string;
-  operation: "LIST" | "DEPLOY" | "UPDATE" | "REMOVE" | "UPDATE_SELF";
+  operation: "LIST" | "DEPLOY" | "UPDATE" | "REMOVE" | "CHECK_TOKEN" | "UPDATE_SELF";
   agentType?: "device-agent" | "monitor-agent";
   instance?: string;
   version?: string;
@@ -166,6 +167,19 @@ export class SensorSphereSupervisorClient {
         case "REMOVE":
           if (!message.agentType) throw new Error("agentType is required");
           result = await this.manager.remove(message.agentType, message.instance ?? "main");
+          break;
+        case "CHECK_TOKEN":
+          if (message.agentType) {
+            result = await this.manager.checkToken(message.agentType, message.instance ?? "main");
+          } else {
+            const token = this.config.sensorsphereAgentToken;
+            if (!token) throw new Error("SENSORSPHERE_AGENT_TOKEN is not configured");
+            const tokenHash = createHash("sha256").update(token).digest("hex");
+            result = {
+              token_hash: tokenHash,
+              token_fingerprint: `${tokenHash.slice(0, 4).toUpperCase()}-${tokenHash.slice(4, 8).toUpperCase()}`
+            };
+          }
           break;
         case "UPDATE_SELF":
           if (!message.version) throw new Error("version is required");

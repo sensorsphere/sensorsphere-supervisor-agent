@@ -12,6 +12,7 @@ const manager = new ManagedAgentManager(config, runner);
 const selfManager = new SelfUpdateManager(config, runner);
 const version = fs.readFileSync(new URL("../VERSION", import.meta.url), "utf8").trim();
 
+await selfManager.ensureInstallOwnership();
 await startServer(config, manager, selfManager);
 
 const sensorsphereClient = new SensorSphereSupervisorClient(config, version, manager, selfManager);
