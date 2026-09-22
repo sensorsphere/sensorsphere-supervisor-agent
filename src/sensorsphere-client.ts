@@ -177,7 +177,11 @@ export class SensorSphereSupervisorClient {
             const tokenHash = createHash("sha256").update(token).digest("hex");
             result = {
               token_hash: tokenHash,
-              token_fingerprint: `${tokenHash.slice(0, 4).toUpperCase()}-${tokenHash.slice(4, 8).toUpperCase()}`
+              token_fingerprint: `${tokenHash.slice(0, 4).toUpperCase()}-${tokenHash.slice(4, 8).toUpperCase()}`,
+              runtime_token_hash: tokenHash,
+              runtime_token_fingerprint: `${tokenHash.slice(0, 4).toUpperCase()}-${tokenHash.slice(4, 8).toUpperCase()}`,
+              runtime_token_present: true,
+              runtime_sensorsphere_url: this.config.sensorsphereUrl
             };
           }
           break;
