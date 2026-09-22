@@ -107,7 +107,18 @@ export class SelfUpdateManager {
       path.join(this.config.selfInstallDir, "docker-compose.yml"),
       this.config.selfUpdateStatusFile
     ];
-    for (const candidate of candidates) {
+    try {
+      const entries = await fs.readdir(this.config.selfInstallDir);
+      for (const entry of entries) {
+        if (entry.includes(".self-update-backup-") || entry.startsWith(".supervisor-update-status")) {
+          candidates.push(path.join(this.config.selfInstallDir, entry));
+        }
+      }
+    } catch (error) {
+      const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code ?? "") : "";
+      if (code !== "ENOENT") throw error;
+    }
+    for (const candidate of [...new Set(candidates)]) {
       try {
         await fs.chown(candidate, this.config.defaultPuid, this.config.defaultPgid);
       } catch (error) {
@@ -118,6 +129,10 @@ export class SelfUpdateManager {
   }
 
   async getStatus(): Promise<SelfStatus> {
+    // The detached self-update helper runs as root and may recreate status or backup files.
+    // Re-apply the original installer UID/GID on every status refresh so ownership converges
+    // immediately after a self-update instead of remaining root-owned.
+    await this.ensureInstallOwnership();
     const configuredImage = await this.readConfiguredImage();
     const container = await this.inspectContainer();
     return {
