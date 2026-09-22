@@ -355,27 +355,72 @@ export class ManagedAgentManager {
     }
   }
 
-  async checkToken(agentType: ManagedAgentType, instance = "main"): Promise<Record<string, unknown>> {
-    const target = this.target(agentType, instance);
-    const envPath = this.paths(target).env;
-    if (!(await this.exists(envPath))) throw new Error(`${this.key(target)} is not installed`);
-    const content = await fs.readFile(envPath, "utf8");
-    const tokenKey = agentType === "device-agent" ? "SENSORSPHERE_DEVICE_AGENT_TOKEN" : "SENSORSPHERE_AGENT_TOKEN";
-    let token: string | null = null;
+  private tokenFingerprint(token: string | null): { hash: string | null; fingerprint: string | null } {
+    if (!token) return { hash: null, fingerprint: null };
+    const hash = createHash("sha256").update(token).digest("hex");
+    return { hash, fingerprint: `${hash.slice(0, 4).toUpperCase()}-${hash.slice(4, 8).toUpperCase()}` };
+  }
+
+  private readEnvValue(content: string, key: string): string | null {
+    let value: string | null = null;
     for (const line of content.split(/\r?\n/)) {
-      const match = line.match(new RegExp(`^\\s*(?:export\\s+)?${tokenKey}\\s*=\\s*(.*)$`));
+      const match = line.match(new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=\\s*(.*)$`));
       if (!match) continue;
       const raw = match[1]!.trim();
-      token = raw.replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+      value = raw.replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
     }
-    if (!token) throw new Error(`${tokenKey} is not configured for ${this.key(target)}`);
-    const tokenHash = createHash("sha256").update(token).digest("hex");
+    return value?.trim() || null;
+  }
+
+  private async runtimeEnvironment(containerId: string | null): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (!containerId) return result;
+    const inspect = await this.runner.run(
+      "docker",
+      ["inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", containerId],
+      this.config.operationTimeoutMs,
+    );
+    for (const line of inspect.stdout.split(/\r?\n/)) {
+      const separator = line.indexOf("=");
+      if (separator <= 0) continue;
+      result.set(line.slice(0, separator), line.slice(separator + 1));
+    }
+    return result;
+  }
+
+  async checkToken(agentType: ManagedAgentType, instance = "main"): Promise<Record<string, unknown>> {
+    const target = this.target(agentType, instance);
+    const paths = this.paths(target);
+    if (!(await this.exists(paths.env))) throw new Error(`${this.key(target)} is not installed`);
+
+    const content = await fs.readFile(paths.env, "utf8");
+    const tokenKey = agentType === "device-agent" ? "SENSORSPHERE_DEVICE_AGENT_TOKEN" : "SENSORSPHERE_AGENT_TOKEN";
+    const configuredToken = this.readEnvValue(content, tokenKey);
+    if (!configuredToken) throw new Error(`${tokenKey} is not configured for ${this.key(target)}`);
+    const configuredUrl = this.readEnvValue(content, "SENSORSPHERE_URL");
+
+    const configured = this.tokenFingerprint(configuredToken);
+    const container = await this.inspectContainer(target, paths);
+    const runtimeEnv = await this.runtimeEnvironment(container.id);
+    const runtimeToken = runtimeEnv.get(tokenKey)?.trim() || null;
+    const runtimeUrl = runtimeEnv.get("SENSORSPHERE_URL")?.trim() || null;
+    const runtime = this.tokenFingerprint(runtimeToken);
+
     return {
       agent_type: agentType,
       instance,
       install_dir: target.installDir,
-      token_hash: tokenHash,
-      token_fingerprint: `${tokenHash.slice(0, 4).toUpperCase()}-${tokenHash.slice(4, 8).toUpperCase()}`
+      container_id: container.id,
+      container_state: container.state,
+      token_hash: runtime.hash ?? configured.hash,
+      token_fingerprint: runtime.fingerprint ?? configured.fingerprint,
+      configured_token_hash: configured.hash,
+      configured_token_fingerprint: configured.fingerprint,
+      runtime_token_hash: runtime.hash,
+      runtime_token_fingerprint: runtime.fingerprint,
+      runtime_token_present: runtimeToken != null,
+      configured_sensorsphere_url: configuredUrl,
+      runtime_sensorsphere_url: runtimeUrl
     };
   }
 

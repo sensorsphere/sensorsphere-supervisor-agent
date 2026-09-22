@@ -2,7 +2,10 @@
 
 SensorSphere Supervisor Agent is the host-local lifecycle service for known SensorSphere agents. It owns Docker lifecycle access so managed agents never need direct access to the Docker daemon.
 
-## Scope of 0.6.1
+## Scope of 0.6.3
+
+0.6.3 makes token diagnostics runtime-aware: `CHECK_TOKEN` now reports both the token configured in the managed agent `.env` file and the token actually present in the running container. This detects stale containers that were not recreated after a token change.
+
 
 0.6.1 provides the generic host-local lifecycle service used by SensorSphere to manage known Device and Monitor Agent instances and to self-update the Supervisor.
 
