@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import WebSocket from "ws";
 import type { SupervisorConfig } from "./config.js";
@@ -12,6 +13,16 @@ interface RemoteCommand {
   instance?: string;
   version?: string;
   environment?: Record<string, string>;
+}
+
+function reportedHostname(): string {
+  try {
+    const value = fs.readFileSync("/host/etc/hostname", "utf8").trim();
+    if (value) return value;
+  } catch {
+    // Older deployments may not mount the host hostname yet.
+  }
+  return os.hostname();
 }
 
 function wsUrl(baseUrl: string): string {
@@ -100,9 +111,9 @@ export class SensorSphereSupervisorClient {
     const snapshot = await this.snapshot();
     this.socket.send(JSON.stringify({
       type: "HELLO",
-      supervisorName: this.config.supervisorName || os.hostname(),
+      supervisorName: this.config.supervisorName || reportedHostname(),
       version: this.version,
-      hostname: os.hostname(),
+      hostname: reportedHostname(),
       systemInfo: { os: os.type(), osVersion: os.release(), architecture: os.arch() },
       selfUpdateSupported: true,
       ...snapshot
