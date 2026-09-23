@@ -3,6 +3,7 @@ services:
     image: "${SUPERVISOR_AGENT_IMAGE:-ghcr.io/sensorsphere/sensorsphere-supervisor-agent:latest}"
     hostname: "${SUPERVISOR_HOSTNAME:-sensorsphere-supervisor-agent}"
     restart: unless-stopped
+    network_mode: host
     environment:
       SENSORSPHERE_URL: "${SENSORSPHERE_URL:-}"
       SENSORSPHERE_AGENT_TOKEN: "${SENSORSPHERE_AGENT_TOKEN:-}"

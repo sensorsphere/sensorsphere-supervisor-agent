@@ -19,6 +19,62 @@ interface RemoteCommand {
   installDir?: string;
 }
 
+
+export interface HostNetworkAddress {
+  family: "IPv4" | "IPv6";
+  address: string;
+  prefixLength: number;
+  cidr: string;
+  network: string | null;
+}
+
+export interface HostNetworkInterface {
+  interface: string;
+  mac: string | null;
+  addresses: HostNetworkAddress[];
+}
+
+function ipv4Network(address: string, prefixLength: number): string | null {
+  const parts = address.split(".").map(Number);
+  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255) || prefixLength < 0 || prefixLength > 32) return null;
+  const value = (((parts[0]! << 24) >>> 0) + (parts[1]! << 16) + (parts[2]! << 8) + parts[3]!) >>> 0;
+  const mask = prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;
+  const network = (value & mask) >>> 0;
+  return `${(network >>> 24) & 255}.${(network >>> 16) & 255}.${(network >>> 8) & 255}.${network & 255}/${prefixLength}`;
+}
+
+function excludedInterface(name: string): boolean {
+  return name === "lo" || name === "docker0" || /^br-[0-9a-f]+$/i.test(name) || /^veth/i.test(name) || /^cni/i.test(name) || /^flannel/i.test(name);
+}
+
+function excludedAddress(family: string, address: string, internal: boolean): boolean {
+  if (internal) return true;
+  if (family === "IPv4") return address.startsWith("127.") || address.startsWith("169.254.");
+  const normalized = address.toLowerCase();
+  return normalized === "::1" || normalized.startsWith("fe80:");
+}
+
+export function collectHostNetworks(): HostNetworkInterface[] {
+  const interfaces = os.networkInterfaces();
+  const result: HostNetworkInterface[] = [];
+  for (const [name, entries] of Object.entries(interfaces)) {
+    if (!entries || excludedInterface(name)) continue;
+    const addresses: HostNetworkAddress[] = [];
+    let mac: string | null = null;
+    for (const entry of entries) {
+      const rawFamily = String(entry.family);
+      const family = rawFamily === "IPv4" || rawFamily === "4" ? "IPv4" : rawFamily === "IPv6" || rawFamily === "6" ? "IPv6" : null;
+      if (!family || excludedAddress(family, entry.address, entry.internal)) continue;
+      const cidr = entry.cidr || `${entry.address}/${family === "IPv4" ? 32 : 128}`;
+      const prefixLength = Number.parseInt(cidr.split("/").pop() || (family === "IPv4" ? "32" : "128"), 10);
+      addresses.push({ family, address: entry.address, prefixLength, cidr, network: family === "IPv4" ? ipv4Network(entry.address, prefixLength) : null });
+      if (!mac && entry.mac && entry.mac !== "00:00:00:00:00:00") mac = entry.mac.toLowerCase();
+    }
+    if (addresses.length > 0 || mac) result.push({ interface: name, mac, addresses });
+  }
+  return result.sort((a, b) => a.interface.localeCompare(b.interface, undefined, { numeric: true, sensitivity: "base" }));
+}
+
 interface ManagedAssignmentMessage {
   id: string;
   agentType: "device-agent" | "monitor-agent";
@@ -128,6 +184,7 @@ export class SensorSphereSupervisorClient {
       hostname: reportedHostname(),
       systemInfo: { os: os.type(), osVersion: os.release(), architecture: os.arch() },
       selfUpdateSupported: true,
+      hostNetworks: collectHostNetworks(),
       ...snapshot
     }));
   }
@@ -135,7 +192,7 @@ export class SensorSphereSupervisorClient {
   private async sendHeartbeat(): Promise<void> {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
     const snapshot = await this.snapshot();
-    this.socket.send(JSON.stringify({ type: "HEARTBEAT", ...snapshot }));
+    this.socket.send(JSON.stringify({ type: "HEARTBEAT", hostNetworks: collectHostNetworks(), ...snapshot }));
   }
 
   private async handleMessage(text: string): Promise<void> {

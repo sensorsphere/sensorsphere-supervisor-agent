@@ -255,3 +255,8 @@ IMAGE_NAMESPACE=sensorsphere ./scripts/release-image.sh
 0.6.1 adds a `CHECK_TOKEN` remote operation. SensorSphere can ask the Supervisor to hash the token currently configured for a managed Device or Monitor Agent, or the Supervisor's own runtime token. The raw token is never returned.
 
 Files created or replaced by Supervisor lifecycle operations are restored to the managed agent `PUID` / `PGID` when available, otherwise `SUPERVISOR_DEFAULT_PUID` / `SUPERVISOR_DEFAULT_PGID`. On startup the Supervisor also repairs ownership of its own `.env`, `.env.example`, `docker-compose.yml` and update status file after a self-update.
+
+
+## Host network inventory
+
+0.7.0 reports host network interfaces to SensorSphere, including non-loopback IPv4/IPv6 addresses, IPv4 network CIDRs and interface MAC addresses. Docker bridge/veth and link-local addresses are filtered. The Supervisor container uses host networking so the inventory reflects the host rather than the container network namespace.
