@@ -220,6 +220,8 @@ export class SensorSphereSupervisorClient {
           break;
         case "UPDATE":
           if (!message.agentType || !message.version) throw new Error("agentType and version are required");
+          if (!message.managementId || !message.agentId) throw new Error("managed UPDATE requires managementId and agentId");
+          this.manager.assertManagedAssignment(message.agentType, message.instance ?? "main", message.managementId, message.agentId);
           result = await this.manager.update(message.version, message.agentType, message.instance ?? "main");
           break;
         case "REMOVE":

@@ -260,3 +260,8 @@ Files created or replaced by Supervisor lifecycle operations are restored to the
 ## Host network inventory
 
 0.7.0 reports host network interfaces to SensorSphere, including non-loopback IPv4/IPv6 addresses, IPv4 network CIDRs and interface MAC addresses. Docker bridge/veth and link-local addresses are filtered. The Supervisor container uses host networking so the inventory reflects the host rather than the container network namespace.
+
+
+## 0.7.2 managed-update safety
+
+SensorSphere-triggered managed updates now require an exact management association and SensorSphere agent identity. Deployments also reject cross-agent token prefixes (`ssda_`, `ssma_`, `sssa_`) before Docker is started.

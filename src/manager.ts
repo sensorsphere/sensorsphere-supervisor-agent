@@ -356,6 +356,12 @@ export class ManagedAgentManager {
     for (const key of target.definition.requiredEnvironment) {
       if (!result[key]?.trim()) throw new Error(`${key} is required to deploy ${target.agentType}`);
     }
+    if (target.agentType === "monitor-agent" && result.SENSORSPHERE_AGENT_TOKEN && !result.SENSORSPHERE_AGENT_TOKEN.startsWith("ssma_")) {
+      throw new Error("SENSORSPHERE_AGENT_TOKEN for monitor-agent must use an ssma_ Monitoring Agent token");
+    }
+    if (target.agentType === "device-agent" && result.SENSORSPHERE_DEVICE_AGENT_TOKEN && !result.SENSORSPHERE_DEVICE_AGENT_TOKEN.startsWith("ssda_")) {
+      throw new Error("SENSORSPHERE_DEVICE_AGENT_TOKEN for device-agent must use an ssda_ Device Agent token");
+    }
     for (const key of ["PUID", "PGID"]) {
       if (result[key] !== undefined && !/^\d+$/.test(result[key])) throw new Error(`${key} must be a non-negative integer`);
     }
@@ -608,6 +614,15 @@ export class ManagedAgentManager {
         throw error;
       }
     });
+  }
+
+
+  assertManagedAssignment(agentType: ManagedAgentType, instance: string, managementId: string, agentId: string): void {
+    const target = this.target(agentType, instance);
+    if (!target.managementId || !target.agentId) throw new Error(`${this.key(target)} is not explicitly associated with SensorSphere`);
+    if (target.managementId !== managementId || target.agentId !== agentId) {
+      throw new Error(`${this.key(target)} association does not match the requested SensorSphere agent`);
+    }
   }
 
   async update(version: string, agentType: ManagedAgentType = "device-agent", instance = "main"): Promise<Record<string, unknown>> {

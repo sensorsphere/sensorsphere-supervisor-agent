@@ -96,13 +96,13 @@ test("deploy creates a monitor-agent instance from the known registry", async ()
   const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
   const result = await manager.deploy("monitor-agent", "i2", "1.0.9", {
     SENSORSPHERE_URL: "http://example",
-    SENSORSPHERE_AGENT_TOKEN: "secret",
+    SENSORSPHERE_AGENT_TOKEN: "ssma_test",
     AGENT_NAME: "monitor-i2",
   });
   const dir = path.join(root, "sensorsphere-monitor-agent-i2");
   const env = await fs.readFile(path.join(dir, ".env"), "utf8");
   assert.match(env, /MONITOR_AGENT_IMAGE=ghcr\.io\/sensorsphere\/sensorsphere-monitor-agent:1\.0\.9/);
-  assert.match(env, /SENSORSPHERE_AGENT_TOKEN="secret"/);
+  assert.match(env, /SENSORSPHERE_AGENT_TOKEN="ssma_test"/);
   assert.match(env, /PUID="0"/);
   assert.equal(result.target_version, "1.0.9");
   assert.ok(runner.calls.some(({ args }) => args.includes("pull") && args.includes("monitor-agent")));
@@ -119,12 +119,32 @@ test("deploy rejects missing secrets and non-allowlisted environment keys", asyn
   await assert.rejects(
     () => manager.deploy("device-agent", "main", "1.2.0", {
       SENSORSPHERE_URL: "http://example",
-      SENSORSPHERE_DEVICE_AGENT_TOKEN: "secret",
+      SENSORSPHERE_DEVICE_AGENT_TOKEN: "ssda_test",
       EVIL_IMAGE: "alpine:latest",
     }),
     /EVIL_IMAGE is not allowed/,
   );
   assert.equal(runner.calls.length, 0);
+});
+
+test("deploy rejects cross-agent token types", async () => {
+  const { config, runner } = await fixture();
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  await assert.rejects(() => manager.deploy("monitor-agent", "main", "1.0.10", { SENSORSPHERE_URL: "http://example", SENSORSPHERE_AGENT_TOKEN: "sssa_wrong" }), /ssma_/);
+  await assert.rejects(() => manager.deploy("device-agent", "main", "1.9.0", { SENSORSPHERE_URL: "http://example", SENSORSPHERE_DEVICE_AGENT_TOKEN: "ssma_wrong" }), /ssda_/);
+});
+
+test("managed updates require the exact SensorSphere association", async () => {
+  const { root, config, runner } = await fixture();
+  const dir = path.join(root, "sensorsphere-monitor-agent-i1");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, ".env"), "MONITOR_AGENT_IMAGE=ghcr.io/sensorsphere/sensorsphere-monitor-agent:1.0.9\nSENSORSPHERE_AGENT_TOKEN=ssma_test\n", "utf8");
+  await fs.writeFile(path.join(dir, "docker-compose.yml"), "services:\n  monitor-agent:\n    image: test\n", "utf8");
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  manager.setManagedAssignments([{ id: "management-i1", agentType: "monitor-agent", agentId: "agent-i1", instance: "i1", installDir: dir }]);
+  assert.doesNotThrow(() => manager.assertManagedAssignment("monitor-agent", "i1", "management-i1", "agent-i1"));
+  assert.throws(() => manager.assertManagedAssignment("monitor-agent", "main", "management-i1", "agent-i1"), /not explicitly associated/);
+  assert.throws(() => manager.assertManagedAssignment("monitor-agent", "i1", "management-i1", "other-agent"), /does not match/);
 });
 
 test("legacy update still updates device-agent/main and rolls back on failure", async () => {
