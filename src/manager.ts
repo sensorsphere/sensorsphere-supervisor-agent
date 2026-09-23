@@ -527,7 +527,7 @@ export class ManagedAgentManager {
         if (after.state !== "running") throw new Error(`deployed ${this.key(target)} is not running (state=${after.state})`);
         if (after.image !== targetImage) throw new Error(`deployed ${this.key(target)} is running unexpected image ${after.image ?? "unknown"}`);
         const tokenCheck = await this.checkToken(agentType, instance);
-        return { ...(await this.getStatus(agentType, instance)), target_version: normalizedVersion, token_hash: tokenCheck.token_hash, token_fingerprint: tokenCheck.token_fingerprint };
+        return { ...(await this.getStatus(agentType, instance)), target_version: normalizedVersion, token_hash: tokenCheck.token_hash, token_fingerprint: tokenCheck.token_fingerprint, configured_token_hash: tokenCheck.configured_token_hash, configured_token_fingerprint: tokenCheck.configured_token_fingerprint, runtime_token_hash: tokenCheck.runtime_token_hash, runtime_token_fingerprint: tokenCheck.runtime_token_fingerprint, runtime_token_present: tokenCheck.runtime_token_present, configured_sensorsphere_url: tokenCheck.configured_sensorsphere_url, runtime_sensorsphere_url: tokenCheck.runtime_sensorsphere_url };
       } catch (error) {
         try {
           if (await this.exists(paths.env) && await this.exists(paths.compose)) {
