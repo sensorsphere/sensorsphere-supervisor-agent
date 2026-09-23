@@ -718,6 +718,7 @@ export class ManagedAgentManager {
     if (await this.exists(configPath)) {
       existing = new Map(parseProxmoxConfig(await fs.readFile(configPath, "utf8")).map(endpoint => [endpoint.id, endpoint]));
     }
+    const claimedOriginalIds = new Set<string>();
     const endpoints: ProxmoxManagedEndpoint[] = payload.endpoints.map((raw, index) => {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`Invalid Proxmox endpoint at index ${index}`);
       const value = raw as Record<string, unknown>;
@@ -725,10 +726,16 @@ export class ManagedAgentManager {
       const product = String(value.product ?? "PVE").trim().toUpperCase();
       const url = String(value.url ?? "").trim();
       const tokenId = String(value.tokenId ?? "").trim();
+      const originalId = typeof value.originalId === "string" ? value.originalId.trim() : "";
       const suppliedSecret = typeof value.tokenSecret === "string" ? value.tokenSecret : "";
-      const tokenSecret = suppliedSecret || existing.get(id)?.tokenSecret || "";
+      const tokenSecret = suppliedSecret || existing.get(id)?.tokenSecret || (originalId ? existing.get(originalId)?.tokenSecret : undefined) || "";
       const verifyTls = value.verifyTls !== false;
       if (!id || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw new Error(`Invalid Proxmox endpoint id at index ${index}`);
+      if (originalId && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(originalId)) throw new Error(`Invalid original Proxmox endpoint id at index ${index}`);
+      if (originalId) {
+        if (claimedOriginalIds.has(originalId)) throw new Error(`Duplicate original Proxmox endpoint id ${originalId}`);
+        claimedOriginalIds.add(originalId);
+      }
       if (product !== "PVE" && product !== "PBS") throw new Error(`Invalid Proxmox product for ${id}`);
       const parsedUrl = new URL(url);
       if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password) throw new Error(`Invalid Proxmox URL for ${id}`);

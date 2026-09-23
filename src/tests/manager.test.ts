@@ -147,6 +147,52 @@ test("managed updates require the exact SensorSphere association", async () => {
   assert.throws(() => manager.assertManagedAssignment("monitor-agent", "i1", "management-i1", "other-agent"), /does not match/);
 });
 
+
+test("renaming a Proxmox endpoint preserves the existing token secret", async () => {
+  const { root, config, runner } = await fixture();
+  const dir = await existingDevice(root);
+  const configDir = path.join(dir, "config");
+  await fs.mkdir(configDir, { recursive: true });
+  await fs.writeFile(path.join(configDir, "proxmox.yml"), [
+    "version: 1",
+    "endpoints:",
+    '  - id: "pve-1"',
+    '    product: "PVE"',
+    '    url: "https://7.0.100.11:8006"',
+    '    token_id: "sensorsphere@pve!device-agent2"',
+    '    token_secret: "existing-secret"',
+    "    verify_tls: false",
+    "",
+  ].join("\n"), "utf8");
+
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  const result = await manager.setProxmoxConfig("main", { endpoints: [{
+    id: "pve-cluster",
+    originalId: "pve-1",
+    product: "PVE",
+    url: "https://7.0.100.11:8006",
+    tokenId: "sensorsphere@pve!device-agent2",
+    verifyTls: false,
+  }] });
+
+  const written = await fs.readFile(path.join(configDir, "proxmox.yml"), "utf8");
+  assert.match(written, /id: "pve-cluster"/);
+  assert.doesNotMatch(written, /id: "pve-1"/);
+  assert.match(written, /token_secret: "existing-secret"/);
+  assert.deepEqual(result, {
+    configured: true,
+    config_path: path.join(configDir, "proxmox.yml"),
+    endpoints: [{
+      id: "pve-cluster",
+      product: "PVE",
+      url: "https://7.0.100.11:8006",
+      tokenId: "sensorsphere@pve!device-agent2",
+      tokenSecretConfigured: true,
+      verifyTls: false,
+    }],
+  });
+});
+
 test("legacy update still updates device-agent/main and rolls back on failure", async () => {
   const { root, config, runner } = await fixture();
   const dir = await existingDevice(root);

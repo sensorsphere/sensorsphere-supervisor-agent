@@ -270,3 +270,8 @@ SensorSphere-triggered managed updates now require an exact management associati
 ## 0.7.3 managed Compose environment isolation
 
 Managed-agent Docker Compose commands no longer inherit SensorSphere identity and agent-specific Compose variables from the Supervisor process environment. This prevents the Supervisor's own `sssa_` token or URL from overriding a managed Monitoring or Device Agent `.env` during deploy, update, rollback, inspection, or removal operations. The managed installation's explicit `--env-file` remains authoritative.
+
+
+## 0.7.4 Proxmox endpoint rename safety
+
+Proxmox endpoint configuration accepts an `originalId` rename hint from SensorSphere. When an existing endpoint is renamed and no new token secret is supplied, the Supervisor reuses the secret from the original endpoint id, writes only the new id to `config/proxmox.yml`, and never returns the secret to SensorSphere.
