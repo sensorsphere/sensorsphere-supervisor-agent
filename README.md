@@ -265,3 +265,8 @@ Files created or replaced by Supervisor lifecycle operations are restored to the
 ## 0.7.2 managed-update safety
 
 SensorSphere-triggered managed updates now require an exact management association and SensorSphere agent identity. Deployments also reject cross-agent token prefixes (`ssda_`, `ssma_`, `sssa_`) before Docker is started.
+
+
+## 0.7.3 managed Compose environment isolation
+
+Managed-agent Docker Compose commands no longer inherit SensorSphere identity and agent-specific Compose variables from the Supervisor process environment. This prevents the Supervisor's own `sssa_` token or URL from overriding a managed Monitoring or Device Agent `.env` during deploy, update, rollback, inspection, or removal operations. The managed installation's explicit `--env-file` remains authoritative.
