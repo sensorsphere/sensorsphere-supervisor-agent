@@ -68,7 +68,6 @@ const DEFINITIONS: Record<ManagedAgentType, AgentDefinition> = {
       "ESPHOME_REQUEST_TIMEOUT_MS",
       "ESPHOME_NOISE_PSK",
       "PROXMOX_REQUEST_TIMEOUT_MS",
-      "PROXMOX_ENDPOINTS_JSON",
     ]),
   },
   "monitor-agent": {
@@ -93,6 +92,70 @@ const DEFINITIONS: Record<ManagedAgentType, AgentDefinition> = {
     ]),
   },
 };
+
+
+export interface ProxmoxManagedEndpoint {
+  id: string;
+  product: "PVE" | "PBS";
+  url: string;
+  tokenId: string;
+  tokenSecret?: string;
+  verifyTls: boolean;
+}
+
+function yamlScalar(value: string): string {
+  return JSON.stringify(value);
+}
+
+function serializeProxmoxConfig(endpoints: ProxmoxManagedEndpoint[]): string {
+  const lines = ["version: 1", "endpoints:"];
+  for (const endpoint of endpoints) {
+    lines.push(`  - id: ${yamlScalar(endpoint.id)}`);
+    lines.push(`    product: ${yamlScalar(endpoint.product)}`);
+    lines.push(`    url: ${yamlScalar(endpoint.url)}`);
+    lines.push(`    token_id: ${yamlScalar(endpoint.tokenId)}`);
+    lines.push(`    token_secret: ${yamlScalar(endpoint.tokenSecret ?? "")}`);
+    lines.push(`    verify_tls: ${endpoint.verifyTls ? "true" : "false"}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function parseYamlValue(raw: string): unknown {
+  const value = raw.trim();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  try { return JSON.parse(value); } catch { return value; }
+}
+
+function parseProxmoxConfig(content: string): ProxmoxManagedEndpoint[] {
+  const endpoints: Array<Record<string, unknown>> = [];
+  let current: Record<string, unknown> | null = null;
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    const start = line.match(/^\s*-\s+id:\s*(.+)$/);
+    if (start) {
+      current = { id: parseYamlValue(start[1]!) };
+      endpoints.push(current);
+      continue;
+    }
+    const field = line.match(/^\s+(product|url|token_id|token_secret|verify_tls):\s*(.*)$/);
+    if (current && field) current[field[1]!] = parseYamlValue(field[2]!);
+  }
+  return endpoints.map((value, index) => {
+    const id = String(value.id ?? "").trim();
+    const product = String(value.product ?? "PVE").trim().toUpperCase();
+    const url = String(value.url ?? "").trim();
+    const tokenId = String(value.token_id ?? "").trim();
+    const tokenSecret = String(value.token_secret ?? "");
+    const verifyTls = value.verify_tls !== false;
+    if (!id || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw new Error(`Invalid Proxmox endpoint id at index ${index}`);
+    if (product !== "PVE" && product !== "PBS") throw new Error(`Invalid Proxmox product for ${id}`);
+    const parsedUrl = new URL(url);
+    if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password) throw new Error(`Invalid Proxmox URL for ${id}`);
+    if (!tokenId.includes("!")) throw new Error(`Invalid Proxmox token id for ${id}`);
+    return { id, product: product as "PVE" | "PBS", url: parsedUrl.toString().replace(/\/$/, ""), tokenId, tokenSecret, verifyTls };
+  });
+}
 
 export interface ManagedStatus {
   management_id: string | null;
@@ -515,8 +578,13 @@ export class ManagedAgentManager {
         await fs.mkdir(target.installDir, { recursive: true });
         const composeBody = await this.downloadCompose(target, normalizedVersion);
         await this.writeNewEnvironment(target, normalizedVersion, environment);
+        const configDir = path.join(target.installDir, "config");
+        if (target.agentType === "device-agent") {
+          await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
+          await fs.chmod(configDir, 0o700);
+        }
         await fs.writeFile(paths.compose, composeBody, "utf8");
-        await this.applyOwnership(target, [paths.env, paths.compose]);
+        await this.applyOwnership(target, [paths.env, paths.compose, ...(target.agentType === "device-agent" ? [configDir] : [])]);
 
         await this.runner.run("docker", this.composeArgs(target, paths, ["config", "--quiet"]), this.config.operationTimeoutMs);
         await this.runner.run("docker", this.composeArgs(target, paths, ["pull", target.definition.serviceName]), this.config.operationTimeoutMs);
@@ -605,6 +673,72 @@ export class ManagedAgentManager {
         await fs.rm(composeTemp, { force: true });
       }
     });
+  }
+
+
+  async getProxmoxConfig(instance = "main"): Promise<Record<string, unknown>> {
+    const target = this.target("device-agent", instance);
+    const configPath = path.join(target.installDir, "config", "proxmox.yml");
+    if (!(await this.exists(configPath))) return { configured: false, endpoints: [], config_path: configPath };
+    const endpoints = parseProxmoxConfig(await fs.readFile(configPath, "utf8"));
+    return {
+      configured: endpoints.length > 0,
+      config_path: configPath,
+      endpoints: endpoints.map(endpoint => ({
+        id: endpoint.id, product: endpoint.product, url: endpoint.url, tokenId: endpoint.tokenId,
+        tokenSecretConfigured: Boolean(endpoint.tokenSecret), verifyTls: endpoint.verifyTls
+      }))
+    };
+  }
+
+  async setProxmoxConfig(instance: string, input: unknown): Promise<Record<string, unknown>> {
+    const target = this.target("device-agent", instance);
+    const paths = this.paths(target);
+    if (!(await this.exists(paths.env)) || !(await this.exists(paths.compose))) throw new Error(`${this.key(target)} is not installed`);
+    const payload = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
+    if (!Array.isArray(payload.endpoints)) throw new Error("Proxmox configuration must contain an endpoints array");
+    const configDir = path.join(target.installDir, "config");
+    const configPath = path.join(configDir, "proxmox.yml");
+    let existing = new Map<string, ProxmoxManagedEndpoint>();
+    if (await this.exists(configPath)) {
+      existing = new Map(parseProxmoxConfig(await fs.readFile(configPath, "utf8")).map(endpoint => [endpoint.id, endpoint]));
+    }
+    const endpoints: ProxmoxManagedEndpoint[] = payload.endpoints.map((raw, index) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`Invalid Proxmox endpoint at index ${index}`);
+      const value = raw as Record<string, unknown>;
+      const id = String(value.id ?? "").trim();
+      const product = String(value.product ?? "PVE").trim().toUpperCase();
+      const url = String(value.url ?? "").trim();
+      const tokenId = String(value.tokenId ?? "").trim();
+      const suppliedSecret = typeof value.tokenSecret === "string" ? value.tokenSecret : "";
+      const tokenSecret = suppliedSecret || existing.get(id)?.tokenSecret || "";
+      const verifyTls = value.verifyTls !== false;
+      if (!id || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw new Error(`Invalid Proxmox endpoint id at index ${index}`);
+      if (product !== "PVE" && product !== "PBS") throw new Error(`Invalid Proxmox product for ${id}`);
+      const parsedUrl = new URL(url);
+      if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password) throw new Error(`Invalid Proxmox URL for ${id}`);
+      if (!tokenId.includes("!")) throw new Error(`Invalid Proxmox token id for ${id}`);
+      if (!tokenSecret) throw new Error(`Proxmox token secret is required for ${id}`);
+      return { id, product: product as "PVE" | "PBS", url: parsedUrl.toString().replace(/\/$/, ""), tokenId, tokenSecret, verifyTls };
+    });
+    if (new Set(endpoints.map(endpoint => endpoint.id)).size !== endpoints.length) throw new Error("Duplicate Proxmox endpoint id");
+    await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(configPath, serializeProxmoxConfig(endpoints), { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(configDir, 0o700);
+    await fs.chmod(configPath, 0o600);
+    await this.applyOwnership(target, [configDir, configPath]);
+    await this.runner.run("docker", this.composeArgs(target, paths, ["up", "-d", "--force-recreate", "--no-deps", target.definition.serviceName]), this.config.operationTimeoutMs);
+    return this.getProxmoxConfig(instance);
+  }
+
+  async deleteProxmoxConfig(instance = "main"): Promise<Record<string, unknown>> {
+    const target = this.target("device-agent", instance);
+    const paths = this.paths(target);
+    if (!(await this.exists(paths.env)) || !(await this.exists(paths.compose))) throw new Error(`${this.key(target)} is not installed`);
+    const configPath = path.join(target.installDir, "config", "proxmox.yml");
+    await fs.rm(configPath, { force: true });
+    await this.runner.run("docker", this.composeArgs(target, paths, ["up", "-d", "--force-recreate", "--no-deps", target.definition.serviceName]), this.config.operationTimeoutMs);
+    return { configured: false, endpoints: [], config_path: configPath };
   }
 
   async remove(agentType: ManagedAgentType, instance = "main"): Promise<Record<string, unknown>> {

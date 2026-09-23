@@ -9,7 +9,7 @@ import type { SelfUpdateManager } from "./self-manager.js";
 interface RemoteCommand {
   type: "SUPERVISOR_COMMAND";
   commandId: string;
-  operation: "LIST" | "DEPLOY" | "UPDATE" | "REMOVE" | "CHECK_TOKEN" | "UPDATE_SELF";
+  operation: "LIST" | "DEPLOY" | "UPDATE" | "REMOVE" | "CHECK_TOKEN" | "GET_PROXMOX_CONFIG" | "SET_PROXMOX_CONFIG" | "DELETE_PROXMOX_CONFIG" | "UPDATE_SELF";
   agentType?: "device-agent" | "monitor-agent";
   instance?: string;
   version?: string;
@@ -17,6 +17,7 @@ interface RemoteCommand {
   managementId?: string;
   agentId?: string;
   installDir?: string;
+  config?: unknown;
 }
 
 
@@ -224,6 +225,15 @@ export class SensorSphereSupervisorClient {
         case "REMOVE":
           if (!message.agentType) throw new Error("agentType is required");
           result = await this.manager.remove(message.agentType, message.instance ?? "main");
+          break;
+        case "GET_PROXMOX_CONFIG":
+          result = await this.manager.getProxmoxConfig(message.instance ?? "main");
+          break;
+        case "SET_PROXMOX_CONFIG":
+          result = await this.manager.setProxmoxConfig(message.instance ?? "main", message.config);
+          break;
+        case "DELETE_PROXMOX_CONFIG":
+          result = await this.manager.deleteProxmoxConfig(message.instance ?? "main");
           break;
         case "CHECK_TOKEN":
           if (message.agentType) {
