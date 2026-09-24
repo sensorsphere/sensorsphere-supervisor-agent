@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPOSITORY="${REPOSITORY:-sensorsphere/sensorsphere-supervisor-agent}"
 RAW_BASE_URL="${RAW_BASE_URL:-https://raw.githubusercontent.com}"
-VERSION="${VERSION:-0.8.0}"
+VERSION="${VERSION:-0.8.1}"
 ENVIRONMENT="${SENSORSPHERE_ENVIRONMENT:-DEFAULT}"
 ENVIRONMENT="$(printf '%s' "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')"
 [[ "$ENVIRONMENT" =~ ^[A-Z0-9][A-Z0-9._-]{0,31}$ ]] || { printf 'ERROR: SENSORSPHERE_ENVIRONMENT must match ^[A-Z0-9][A-Z0-9._-]{0,31}$\n' >&2; exit 1; }
@@ -97,7 +97,7 @@ chmod 600 "$INSTALL_DIR/.env"
   docker compose --env-file .env up -d
 )
 
-socket_path="$SOCKET_PATH"
+socket_path="${SOCKET_DIR}/$(basename "$SOCKET_PATH")"
 for _ in $(seq 1 30); do
   [[ -S "$socket_path" ]] && { printf 'Supervisor socket ready: %s\n' "$socket_path"; exit 0; }
   sleep 1

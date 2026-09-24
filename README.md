@@ -280,3 +280,8 @@ Proxmox endpoint configuration accepts an `originalId` rename hint from SensorSp
 ## 0.8.0 environment isolation
 
 A Supervisor can be assigned to a functional deployment environment with `SENSORSPHERE_ENVIRONMENT` (for example `DIT`, `IAT`, or `PROD`). The Supervisor derives a lowercase runtime namespace and isolates its install root, host Unix-socket directory and Docker Compose project names while keeping the in-container socket path stable for managed-agent compatibility. Multiple SensorSphere environments can therefore run on the same physical host without sharing managed-agent runtime resources. `DEFAULT` preserves the legacy layout for existing installations.
+
+
+## 0.8.1 installer host-socket verification
+
+The installer now verifies Supervisor readiness against the host-side Unix socket path. For namespaced environments, the host socket lives under `SUPERVISOR_SOCKET_DIR` (for example `/run/sensorsphere/dit/supervisor.sock`) while the in-container socket path remains `/run/sensorsphere-supervisor-agent/supervisor.sock` for managed-agent compatibility. `DEFAULT` continues to verify `/run/sensorsphere-supervisor-agent/supervisor.sock`.
