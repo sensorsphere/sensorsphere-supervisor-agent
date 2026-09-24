@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPOSITORY="${REPOSITORY:-sensorsphere/sensorsphere-supervisor-agent}"
 RAW_BASE_URL="${RAW_BASE_URL:-https://raw.githubusercontent.com}"
-VERSION="${VERSION:-0.8.1}"
+VERSION="${VERSION:-0.8.2}"
 ENVIRONMENT="${SENSORSPHERE_ENVIRONMENT:-DEFAULT}"
 ENVIRONMENT="$(printf '%s' "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')"
 [[ "$ENVIRONMENT" =~ ^[A-Z0-9][A-Z0-9._-]{0,31}$ ]] || { printf 'ERROR: SENSORSPHERE_ENVIRONMENT must match ^[A-Z0-9][A-Z0-9._-]{0,31}$\n' >&2; exit 1; }
@@ -21,6 +21,7 @@ fi
 ADDITIONAL_MANAGED_ROOT="${SUPERVISOR_ADDITIONAL_MANAGED_ROOT:-$([[ "$ENVIRONMENT" == "DEFAULT" ]] && printf /opt || printf /opt/sensorsphere-%s "$ENVIRONMENT")}"
 SOCKET_PATH="${SUPERVISOR_SOCKET_PATH:-/run/sensorsphere-supervisor-agent/supervisor.sock}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-sensorsphere-${NAMESPACE}-supervisor}"
+HOST_SOCKET_PATH="${SOCKET_DIR}/$(basename "$SOCKET_PATH")"
 SOURCE_REF="v${VERSION}"
 IMAGE="ghcr.io/sensorsphere/sensorsphere-supervisor-agent:${VERSION}"
 
@@ -34,13 +35,21 @@ mkdir -p "$INSTALL_DIR"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+SENSORSPHERE_URL_DISPLAY="${SENSORSPHERE_URL:-}"
+if [[ -z "$SENSORSPHERE_URL_DISPLAY" && -f "$INSTALL_DIR/.env" ]]; then
+  SENSORSPHERE_URL_DISPLAY="$(sed -n 's/^SENSORSPHERE_URL=//p' "$INSTALL_DIR/.env" | tail -1)"
+fi
+[[ -n "$SENSORSPHERE_URL_DISPLAY" ]] || SENSORSPHERE_URL_DISPLAY="(not configured)"
+
 printf 'Installing SensorSphere Supervisor Agent\n'
-printf '  version:       %s\n' "$VERSION"
-printf '  environment:   %s\n' "$ENVIRONMENT"
-printf '  namespace:     %s\n' "$NAMESPACE"
-printf '  install dir:   %s\n' "$INSTALL_DIR"
-printf '  managed root:  %s\n' "$MANAGED_ROOT"
-printf '  PUID/PGID:     %s/%s\n' "$(id -u)" "$(id -g)"
+printf '  SensorSphere URL:  %s\n' "$SENSORSPHERE_URL_DISPLAY"
+printf '  version:           %s\n' "$VERSION"
+printf '  environment:       %s\n' "$ENVIRONMENT"
+printf '  namespace:         %s\n' "$NAMESPACE"
+printf '  install dir:       %s\n' "$INSTALL_DIR"
+printf '  managed root:      %s\n' "$MANAGED_ROOT"
+printf '  Supervisor socket: %s\n' "$HOST_SOCKET_PATH"
+printf '  PUID/PGID:         %s/%s\n' "$(id -u)" "$(id -g)"
 
 curl -fsSL "${RAW_BASE_URL}/${REPOSITORY}/${SOURCE_REF}/docker-compose.yml" -o "$TMP_DIR/docker-compose.yml"
 curl -fsSL "${RAW_BASE_URL}/${REPOSITORY}/${SOURCE_REF}/.env.example" -o "$TMP_DIR/.env.example"
@@ -97,7 +106,7 @@ chmod 600 "$INSTALL_DIR/.env"
   docker compose --env-file .env up -d
 )
 
-socket_path="${SOCKET_DIR}/$(basename "$SOCKET_PATH")"
+socket_path="$HOST_SOCKET_PATH"
 for _ in $(seq 1 30); do
   [[ -S "$socket_path" ]] && { printf 'Supervisor socket ready: %s\n' "$socket_path"; exit 0; }
   sleep 1
