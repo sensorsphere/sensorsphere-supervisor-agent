@@ -42,7 +42,7 @@ interface ManagedPaths {
   compose: string;
 }
 
-const COMMON_ENVIRONMENT = ["PUID", "PGID", "DATA_DIR", "AGENT_NAME", "AGENT_LABELS"];
+const COMMON_ENVIRONMENT = ["PUID", "PGID", "DATA_DIR", "AGENT_NAME", "AGENT_LABELS", "SUPERVISOR_SOCKET_DIR", "SUPERVISOR_SOCKET_PATH"];
 
 const DEFINITIONS: Record<ManagedAgentType, AgentDefinition> = {
   "device-agent": {
@@ -163,6 +163,7 @@ export interface ManagedStatus {
   agent_type: ManagedAgentType;
   instance: string;
   install_dir: string;
+  compose_project: string;
   installed: boolean;
   configured_image: string | null;
   configured_version: string | null;
@@ -215,9 +216,12 @@ export class ManagedAgentManager {
     const definition = DEFINITIONS[agentType];
     if (!definition) throw new Error("unsupported agent type");
     const assignment = this.assignments.get(this.assignmentKey(agentType, normalizedInstance));
-    const directory = normalizedInstance === "main"
+    const baseDirectory = this.config.namespace === "default"
       ? definition.directoryName
-      : `${definition.directoryName}-${normalizedInstance}`;
+      : definition.type === "device-agent" ? "device-agent" : "monitor-agent";
+    const directory = normalizedInstance === "main"
+      ? baseDirectory
+      : `${baseDirectory}-${normalizedInstance}`;
     const installDir = path.resolve(assignment?.installDir?.trim() || path.join(this.config.managedRoot, directory));
     if (!this.isAllowedInstallDir(installDir)) {
       throw new Error(`managed target ${installDir} is outside configured managed roots`);
@@ -243,9 +247,15 @@ export class ManagedAgentManager {
     };
   }
 
+  private composeProjectName(target: ManagedTarget): string {
+    const type = target.agentType === "device-agent" ? "device" : "monitor";
+    return `sensorsphere-${this.config.namespace}-${type}-${target.instance.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
+  }
+
   private composeArgs(target: ManagedTarget, paths: ManagedPaths, extra: string[]): string[] {
     return [
       "compose",
+      "--project-name", this.composeProjectName(target),
       "--project-directory", target.installDir,
       "--env-file", paths.env,
       "-f", paths.compose,
@@ -376,6 +386,8 @@ export class ManagedAgentManager {
     const values = this.validateEnvironment(target, environment);
     if (!values.PUID) values.PUID = String(this.config.defaultPuid);
     if (!values.PGID) values.PGID = String(this.config.defaultPgid);
+    if (!values.SUPERVISOR_SOCKET_DIR) values.SUPERVISOR_SOCKET_DIR = this.config.socketHostDir;
+    if (!values.SUPERVISOR_SOCKET_PATH) values.SUPERVISOR_SOCKET_PATH = this.config.socketPath;
     const lines = [
       `${target.definition.imageEnv}=${target.definition.image}:${version}`,
       ...Object.entries(values).map(([key, value]) => this.envLine(key, value)),
@@ -524,9 +536,12 @@ export class ManagedAgentManager {
         if (entry.name.includes(".removed-") || entry.name.includes(".failed-deploy-")) continue;
         for (const definition of Object.values(DEFINITIONS)) {
           let instance: string | null = null;
-          if (entry.name === definition.directoryName) instance = "main";
+          const baseDirectory = this.config.namespace === "default"
+            ? definition.directoryName
+            : definition.type === "device-agent" ? "device-agent" : "monitor-agent";
+          if (entry.name === baseDirectory) instance = "main";
           else {
-            const prefix = `${definition.directoryName}-`;
+            const prefix = `${baseDirectory}-`;
             if (entry.name.startsWith(prefix)) {
               const candidate = entry.name.slice(prefix.length);
               if (INSTANCE_RE.test(candidate)) instance = candidate;
@@ -555,6 +570,7 @@ export class ManagedAgentManager {
       agent_type: target.agentType,
       instance: target.instance,
       install_dir: target.installDir,
+      compose_project: this.composeProjectName(target),
       installed,
       configured_image: configuredImage,
       configured_version: this.versionFromImage(target, configuredImage),

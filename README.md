@@ -275,3 +275,8 @@ Managed-agent Docker Compose commands no longer inherit SensorSphere identity an
 ## 0.7.4 Proxmox endpoint rename safety
 
 Proxmox endpoint configuration accepts an `originalId` rename hint from SensorSphere. When an existing endpoint is renamed and no new token secret is supplied, the Supervisor reuses the secret from the original endpoint id, writes only the new id to `config/proxmox.yml`, and never returns the secret to SensorSphere.
+
+
+## 0.8.0 environment isolation
+
+A Supervisor can be assigned to a functional deployment environment with `SENSORSPHERE_ENVIRONMENT` (for example `DIT`, `IAT`, or `PROD`). The Supervisor derives a lowercase runtime namespace and isolates its install root, host Unix-socket directory and Docker Compose project names while keeping the in-container socket path stable for managed-agent compatibility. Multiple SensorSphere environments can therefore run on the same physical host without sharing managed-agent runtime resources. `DEFAULT` preserves the legacy layout for existing installations.

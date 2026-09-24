@@ -181,6 +181,8 @@ export class SensorSphereSupervisorClient {
     this.socket.send(JSON.stringify({
       type: "HELLO",
       supervisorName: this.config.supervisorName || reportedHostname(),
+      environment: this.config.environment,
+      namespace: this.config.namespace,
       version: this.version,
       hostname: reportedHostname(),
       systemInfo: { os: os.type(), osVersion: os.release(), architecture: os.arch() },

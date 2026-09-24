@@ -3,9 +3,24 @@ set -euo pipefail
 
 REPOSITORY="${REPOSITORY:-sensorsphere/sensorsphere-supervisor-agent}"
 RAW_BASE_URL="${RAW_BASE_URL:-https://raw.githubusercontent.com}"
-VERSION="${VERSION:-0.6.0}"
-MANAGED_ROOT="${SUPERVISOR_MANAGED_ROOT:-${HOME}}"
-INSTALL_DIR="${SUPERVISOR_INSTALL_DIR:-${MANAGED_ROOT}/sensorsphere-supervisor-agent}"
+VERSION="${VERSION:-0.8.0}"
+ENVIRONMENT="${SENSORSPHERE_ENVIRONMENT:-DEFAULT}"
+ENVIRONMENT="$(printf '%s' "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')"
+[[ "$ENVIRONMENT" =~ ^[A-Z0-9][A-Z0-9._-]{0,31}$ ]] || { printf 'ERROR: SENSORSPHERE_ENVIRONMENT must match ^[A-Z0-9][A-Z0-9._-]{0,31}$\n' >&2; exit 1; }
+NAMESPACE="$(printf '%s' "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^-+//; s/-+$//')"
+[[ -n "$NAMESPACE" ]] || NAMESPACE=default
+if [[ "$ENVIRONMENT" == "DEFAULT" ]]; then
+  MANAGED_ROOT="${SUPERVISOR_MANAGED_ROOT:-${HOME}}"
+  INSTALL_DIR="${SUPERVISOR_INSTALL_DIR:-${MANAGED_ROOT}/sensorsphere-supervisor-agent}"
+  SOCKET_DIR="${SUPERVISOR_SOCKET_DIR:-/run/sensorsphere-supervisor-agent}"
+else
+  MANAGED_ROOT="${SUPERVISOR_MANAGED_ROOT:-${HOME}/sensorsphere-${ENVIRONMENT}}"
+  INSTALL_DIR="${SUPERVISOR_INSTALL_DIR:-${MANAGED_ROOT}/supervisor-agent}"
+  SOCKET_DIR="${SUPERVISOR_SOCKET_DIR:-/run/sensorsphere/${NAMESPACE}}"
+fi
+ADDITIONAL_MANAGED_ROOT="${SUPERVISOR_ADDITIONAL_MANAGED_ROOT:-$([[ "$ENVIRONMENT" == "DEFAULT" ]] && printf /opt || printf /opt/sensorsphere-%s "$ENVIRONMENT")}"
+SOCKET_PATH="${SUPERVISOR_SOCKET_PATH:-/run/sensorsphere-supervisor-agent/supervisor.sock}"
+COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-sensorsphere-${NAMESPACE}-supervisor}"
 SOURCE_REF="v${VERSION}"
 IMAGE="ghcr.io/sensorsphere/sensorsphere-supervisor-agent:${VERSION}"
 
@@ -21,6 +36,8 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 printf 'Installing SensorSphere Supervisor Agent\n'
 printf '  version:       %s\n' "$VERSION"
+printf '  environment:   %s\n' "$ENVIRONMENT"
+printf '  namespace:     %s\n' "$NAMESPACE"
 printf '  install dir:   %s\n' "$INSTALL_DIR"
 printf '  managed root:  %s\n' "$MANAGED_ROOT"
 printf '  PUID/PGID:     %s/%s\n' "$(id -u)" "$(id -g)"
@@ -53,12 +70,14 @@ ensure_env() {
 }
 
 set_env SUPERVISOR_AGENT_IMAGE "$IMAGE"
-ensure_env SUPERVISOR_MANAGED_ROOT "$MANAGED_ROOT"
-ensure_env SUPERVISOR_ADDITIONAL_MANAGED_ROOT "/opt"
+set_env SENSORSPHERE_ENVIRONMENT "$ENVIRONMENT"
+set_env COMPOSE_PROJECT_NAME "$COMPOSE_PROJECT"
+set_env SUPERVISOR_MANAGED_ROOT "$MANAGED_ROOT"
+set_env SUPERVISOR_ADDITIONAL_MANAGED_ROOT "$ADDITIONAL_MANAGED_ROOT"
 ensure_env SUPERVISOR_DEFAULT_PUID "$(id -u)"
 ensure_env SUPERVISOR_DEFAULT_PGID "$(id -g)"
-ensure_env SUPERVISOR_SOCKET_DIR "/run/sensorsphere-supervisor-agent"
-ensure_env SUPERVISOR_SOCKET_PATH "/run/sensorsphere-supervisor-agent/supervisor.sock"
+set_env SUPERVISOR_SOCKET_DIR "$SOCKET_DIR"
+set_env SUPERVISOR_SOCKET_PATH "$SOCKET_PATH"
 ensure_env SUPERVISOR_SOCKET_GID "$(id -g)"
 ensure_env SUPERVISOR_OPERATION_TIMEOUT_MS "120000"
 ensure_env SUPERVISOR_SELF_INSTALL_DIR "$INSTALL_DIR"
@@ -78,7 +97,7 @@ chmod 600 "$INSTALL_DIR/.env"
   docker compose --env-file .env up -d
 )
 
-socket_path="/run/sensorsphere-supervisor-agent/supervisor.sock"
+socket_path="$SOCKET_PATH"
 for _ in $(seq 1 30); do
   [[ -S "$socket_path" ]] && { printf 'Supervisor socket ready: %s\n' "$socket_path"; exit 0; }
   sleep 1

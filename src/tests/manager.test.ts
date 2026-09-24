@@ -29,6 +29,10 @@ async function fixture(): Promise<{ root: string; config: SupervisorConfig; runn
   return {
     root,
     config: {
+      environment: "DEFAULT",
+      namespace: "default",
+      composeProjectName: "sensorsphere-default-supervisor",
+      socketHostDir: path.join(root, "run"),
       socketPath: path.join(root, "supervisor.sock"),
       socketGid: 0,
       managedRoot: root,

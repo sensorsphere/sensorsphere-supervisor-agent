@@ -68,12 +68,12 @@ async function replaceImage(envPath: string, image: string): Promise<void> {
   await fs.writeFile(envPath, next, { mode: 0o600 });
 }
 
-function composeArgs(installDir: string, envPath: string, composePath: string, extra: string[]): string[] {
-  return ["compose", "--project-directory", installDir, "--env-file", envPath, "-f", composePath, ...extra];
+function composeArgs(installDir: string, envPath: string, composePath: string, projectName: string, extra: string[]): string[] {
+  return ["compose", "--project-name", projectName, "--project-directory", installDir, "--env-file", envPath, "-f", composePath, ...extra];
 }
 
-async function inspectService(installDir: string, envPath: string, composePath: string, timeoutMs: number): Promise<{ state: string; image: string | null }> {
-  const ps = await run("docker", composeArgs(installDir, envPath, composePath, ["ps", "-q", SERVICE]), timeoutMs);
+async function inspectService(installDir: string, envPath: string, composePath: string, projectName: string, timeoutMs: number): Promise<{ state: string; image: string | null }> {
+  const ps = await run("docker", composeArgs(installDir, envPath, composePath, projectName, ["ps", "-q", SERVICE]), timeoutMs);
   const id = ps.stdout.trim();
   if (!id) return { state: "not_found", image: null };
   const inspect = await run("docker", ["inspect", "--format", "{{.State.Status}}|{{.Config.Image}}", id], timeoutMs);
@@ -121,13 +121,14 @@ async function waitForTarget(
   socketPath: string,
   targetImage: string,
   targetVersion: string,
+  projectName: string,
   timeoutMs: number,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError = "target Supervisor did not become ready";
   while (Date.now() < deadline) {
     try {
-      const inspected = await inspectService(installDir, envPath, composePath, Math.min(timeoutMs, 10_000));
+      const inspected = await inspectService(installDir, envPath, composePath, projectName, Math.min(timeoutMs, 10_000));
       if (inspected.state === "running" && inspected.image === targetImage) {
         const status = await querySelfStatus(socketPath, 5000);
         if (status.configured_version === targetVersion && status.running_version === targetVersion) return;
@@ -150,6 +151,7 @@ async function main(): Promise<void> {
   const statusFile = required("SUPERVISOR_SELF_STATUS_FILE");
   const socketPath = required("SUPERVISOR_SELF_SOCKET_PATH");
   const composeUrl = required("SUPERVISOR_SELF_COMPOSE_URL");
+  const projectName = required("SUPERVISOR_SELF_COMPOSE_PROJECT");
   const timeoutMs = Number.parseInt(required("SUPERVISOR_SELF_TIMEOUT_MS"), 10);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000) throw new Error("SUPERVISOR_SELF_TIMEOUT_MS must be >= 1000");
 
@@ -177,10 +179,10 @@ async function main(): Promise<void> {
     await replaceImage(envPath, targetImage);
     await fs.rename(composeTemp, composePath);
 
-    await run("docker", composeArgs(installDir, envPath, composePath, ["config", "--quiet"]), timeoutMs);
-    await run("docker", composeArgs(installDir, envPath, composePath, ["pull", SERVICE]), timeoutMs);
-    await run("docker", composeArgs(installDir, envPath, composePath, ["up", "-d", "--no-deps", SERVICE]), timeoutMs);
-    await waitForTarget(installDir, envPath, composePath, socketPath, targetImage, targetVersion, timeoutMs);
+    await run("docker", composeArgs(installDir, envPath, composePath, projectName, ["config", "--quiet"]), timeoutMs);
+    await run("docker", composeArgs(installDir, envPath, composePath, projectName, ["pull", SERVICE]), timeoutMs);
+    await run("docker", composeArgs(installDir, envPath, composePath, projectName, ["up", "-d", "--no-deps", SERVICE]), timeoutMs);
+    await waitForTarget(installDir, envPath, composePath, socketPath, targetImage, targetVersion, projectName, timeoutMs);
 
     await writeRecord(statusFile, { status: "UPDATED", finished_at: new Date().toISOString(), error: null });
   } catch (error) {
@@ -194,10 +196,10 @@ async function main(): Promise<void> {
     try {
       await fs.copyFile(envBackup, envPath);
       await fs.copyFile(composeBackup, composePath);
-      await run("docker", composeArgs(installDir, envPath, composePath, ["pull", SERVICE]), timeoutMs);
-      await run("docker", composeArgs(installDir, envPath, composePath, ["up", "-d", "--no-deps", SERVICE]), timeoutMs);
+      await run("docker", composeArgs(installDir, envPath, composePath, projectName, ["pull", SERVICE]), timeoutMs);
+      await run("docker", composeArgs(installDir, envPath, composePath, projectName, ["up", "-d", "--no-deps", SERVICE]), timeoutMs);
       const previousVersion = previousImage.startsWith(`${SELF_IMAGE}:`) ? previousImage.slice(SELF_IMAGE.length + 1) : "";
-      if (previousVersion) await waitForTarget(installDir, envPath, composePath, socketPath, previousImage, previousVersion, timeoutMs);
+      if (previousVersion) await waitForTarget(installDir, envPath, composePath, socketPath, previousImage, previousVersion, projectName, timeoutMs);
       await writeRecord(statusFile, { status: "ROLLED_BACK", finished_at: new Date().toISOString(), error: original });
     } catch (rollbackError) {
       const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);

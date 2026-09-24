@@ -37,6 +37,10 @@ async function fixture(): Promise<{ root: string; installDir: string; config: Su
   );
   await fs.writeFile(path.join(installDir, "docker-compose.yml"), "services:\n  supervisor-agent:\n    image: test\n", "utf8");
   const config: SupervisorConfig = {
+    environment: "DEFAULT",
+    namespace: "default",
+    composeProjectName: "sensorsphere-default-supervisor",
+    socketHostDir: path.join(root, "run"),
     socketPath: path.join(root, "run", "supervisor.sock"),
     socketGid: 0,
     managedRoot: root,

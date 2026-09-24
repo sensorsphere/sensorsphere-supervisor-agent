@@ -46,6 +46,7 @@ export class SelfUpdateManager {
   private composeArgs(extra: string[]): string[] {
     return [
       "compose",
+      "--project-name", this.config.composeProjectName,
       "--project-directory", this.config.selfInstallDir,
       "--env-file", path.join(this.config.selfInstallDir, ".env"),
       "-f", path.join(this.config.selfInstallDir, "docker-compose.yml"),
@@ -162,7 +163,7 @@ export class SelfUpdateManager {
 
     const targetImage = `${SELF_IMAGE}:${targetVersion}`;
     const requestId = new Date().toISOString().replace(/[:.]/g, "-");
-    const helperName = `sensorsphere-supervisor-self-update-${requestId}`.toLowerCase();
+    const helperName = `sensorsphere-${this.config.namespace}-supervisor-self-update-${requestId}`.toLowerCase();
     const requestedAt = new Date().toISOString();
 
     await this.runner.run("docker", ["pull", targetImage], this.config.operationTimeoutMs);
@@ -183,7 +184,7 @@ export class SelfUpdateManager {
       "--entrypoint", "node",
       "-v", "/var/run/docker.sock:/var/run/docker.sock",
       "-v", `${this.config.managedRoot}:${this.config.managedRoot}`,
-      "-v", `${path.dirname(this.config.socketPath)}:${path.dirname(this.config.socketPath)}`,
+      "-v", `${this.config.socketHostDir}:/run/sensorsphere-supervisor-agent`,
       "-e", `SUPERVISOR_SELF_INSTALL_DIR=${this.config.selfInstallDir}`,
       "-e", `SUPERVISOR_SELF_TARGET_VERSION=${targetVersion}`,
       "-e", `SUPERVISOR_SELF_PREVIOUS_IMAGE=${current.configured_image}`,
@@ -191,6 +192,7 @@ export class SelfUpdateManager {
       "-e", `SUPERVISOR_SELF_SOCKET_PATH=${this.config.socketPath}`,
       "-e", `SUPERVISOR_SELF_TIMEOUT_MS=${this.config.selfUpdateTimeoutMs}`,
       "-e", `SUPERVISOR_SELF_COMPOSE_URL=${SELF_COMPOSE_URL.replace("{version}", targetVersion)}`,
+      "-e", `SUPERVISOR_SELF_COMPOSE_PROJECT=${this.config.composeProjectName}`,
       targetImage,
       "dist/self-update-helper.js",
     ];
