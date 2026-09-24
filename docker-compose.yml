@@ -24,6 +24,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /etc/hostname:/host/etc/hostname:ro
+      - /etc/os-release:/host/etc/os-release:ro
       - "${SUPERVISOR_SOCKET_DIR:-/run/sensorsphere-supervisor-agent}:/run/sensorsphere-supervisor-agent"
       # The generic managed root is mounted at the same absolute path inside the
       # Supervisor so Compose project directories and relative bind mounts resolve

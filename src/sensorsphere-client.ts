@@ -94,6 +94,47 @@ function reportedHostname(): string {
   return os.hostname();
 }
 
+
+interface ReportedSystemInfo {
+  os: string;
+  osVersion: string;
+  architecture: string;
+}
+
+function readOsRelease(): Record<string, string> {
+  try {
+    const text = fs.readFileSync("/host/etc/os-release", "utf8");
+    const values: Record<string, string> = {};
+    for (const line of text.split(/\r?\n/)) {
+      const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
+      if (!match) continue;
+      let value = match[2] ?? "";
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+      values[match[1]!] = value;
+    }
+    return values;
+  } catch {
+    return {};
+  }
+}
+
+function normalizedArchitecture(): string {
+  const arch = os.arch();
+  if (arch === "x64") return "x86_64";
+  if (arch === "arm64") return "aarch64";
+  if (arch === "arm") return "armv7l";
+  return arch;
+}
+
+function reportedSystemInfo(): ReportedSystemInfo {
+  const release = readOsRelease();
+  return {
+    os: release.NAME || os.type(),
+    osVersion: release.VERSION_ID || os.release(),
+    architecture: normalizedArchitecture()
+  };
+}
+
 function wsUrl(baseUrl: string): string {
   const url = new URL(baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -185,7 +226,7 @@ export class SensorSphereSupervisorClient {
       namespace: this.config.namespace,
       version: this.version,
       hostname: reportedHostname(),
-      systemInfo: { os: os.type(), osVersion: os.release(), architecture: os.arch() },
+      systemInfo: reportedSystemInfo(),
       selfUpdateSupported: true,
       hostNetworks: collectHostNetworks(),
       ...snapshot

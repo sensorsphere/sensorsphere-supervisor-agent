@@ -1,6 +1,6 @@
 {
   "name": "sensorsphere-supervisor-agent",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "private": true,
   "description": "SensorSphere local lifecycle supervisor for managed agents",
   "type": "module",
