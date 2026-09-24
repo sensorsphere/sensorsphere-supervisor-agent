@@ -38,8 +38,11 @@ export class ExecCommandRunner implements CommandRunner {
         env: commandEnvironment(command, args),
       }, (error, stdout, stderr) => {
         if (error) {
+          const timedOut = Boolean((error as NodeJS.ErrnoException & { killed?: boolean }).killed);
           const message = stderr.trim() || error.message;
-          reject(new Error(`${command} failed: ${message}`));
+          reject(new Error(timedOut
+            ? `${command} timed out after ${timeoutMs}ms: ${message}`
+            : `${command} failed: ${message}`));
           return;
         }
         resolve({ stdout, stderr });

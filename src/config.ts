@@ -67,7 +67,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConf
     additionalManagedRoot,
     defaultPuid: parseInteger("SUPERVISOR_DEFAULT_PUID", env.SUPERVISOR_DEFAULT_PUID, 1000),
     defaultPgid: parseInteger("SUPERVISOR_DEFAULT_PGID", env.SUPERVISOR_DEFAULT_PGID, 1000),
-    operationTimeoutMs: parseInteger("SUPERVISOR_OPERATION_TIMEOUT_MS", env.SUPERVISOR_OPERATION_TIMEOUT_MS, 120_000),
+    operationTimeoutMs: Math.max(parseInteger("SUPERVISOR_OPERATION_TIMEOUT_MS", env.SUPERVISOR_OPERATION_TIMEOUT_MS, 600_000), 600_000),
     selfInstallDir,
     selfUpdateStatusFile: path.join(selfInstallDir, ".supervisor-update-status.json"),
     selfUpdateTimeoutMs: parseInteger("SUPERVISOR_SELF_UPDATE_TIMEOUT_MS", env.SUPERVISOR_SELF_UPDATE_TIMEOUT_MS, 120_000),

@@ -16,10 +16,15 @@ test("loadConfig uses safe defaults including self-update paths", () => {
   assert.equal(config.defaultPgid, 1000);
   assert.equal(config.socketHostDir, "/run/sensorsphere-supervisor-agent");
   assert.equal(config.socketPath, "/run/sensorsphere-supervisor-agent/supervisor.sock");
-  assert.equal(config.operationTimeoutMs, 120000);
+  assert.equal(config.operationTimeoutMs, 600000);
   assert.equal(config.selfInstallDir, "/srv/sensorsphere/sensorsphere-supervisor-agent");
   assert.equal(config.selfUpdateStatusFile, "/srv/sensorsphere/sensorsphere-supervisor-agent/.supervisor-update-status.json");
   assert.equal(config.selfUpdateTimeoutMs, 120000);
+});
+
+test("loadConfig clamps legacy managed-operation timeouts to ten minutes", () => {
+  const config = loadConfig({ SUPERVISOR_MANAGED_ROOT: "/srv/sensorsphere", SUPERVISOR_OPERATION_TIMEOUT_MS: "120000" });
+  assert.equal(config.operationTimeoutMs, 600000);
 });
 
 test("loadConfig rejects a self install directory outside the managed root", () => {

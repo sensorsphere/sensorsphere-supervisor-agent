@@ -42,6 +42,10 @@ interface ManagedPaths {
   compose: string;
 }
 
+interface ManagedOperationContext {
+  commandId?: string;
+}
+
 const COMMON_ENVIRONMENT = ["PUID", "PGID", "DATA_DIR", "AGENT_NAME", "AGENT_LABELS", "SUPERVISOR_SOCKET_DIR", "SUPERVISOR_SOCKET_PATH"];
 
 const DEFINITIONS: Record<ManagedAgentType, AgentDefinition> = {
@@ -238,6 +242,27 @@ export class ManagedAgentManager {
 
   private key(target: ManagedTarget): string {
     return `${target.agentType}/${target.instance}`;
+  }
+
+
+  private logOperation(
+    target: ManagedTarget,
+    operation: "DEPLOY" | "UPDATE" | "REMOVE",
+    step: string,
+    startedAt: number,
+    context: ManagedOperationContext = {},
+    extra: Record<string, unknown> = {},
+  ): void {
+    console.log(JSON.stringify({
+      command_id: context.commandId ?? null,
+      operation,
+      agent_type: target.agentType,
+      instance: target.instance,
+      step,
+      elapsed_ms: Date.now() - startedAt,
+      ...extra,
+      message: "Managed agent lifecycle",
+    }));
   }
 
   private paths(target: ManagedTarget): ManagedPaths {
@@ -586,9 +611,12 @@ export class ManagedAgentManager {
     instance: string,
     version: string,
     environment: Record<string, string> = {},
+    context: ManagedOperationContext = {},
   ): Promise<Record<string, unknown>> {
     const target = this.target(agentType, instance);
     const normalizedVersion = this.validateVersion(version);
+    const startedAt = Date.now();
+    this.logOperation(target, "DEPLOY", "start", startedAt, context, { version: normalizedVersion, install_dir: target.installDir });
     return this.withOperation(target, async () => {
       const paths = this.paths(target);
       if (await this.exists(paths.env) || await this.exists(paths.compose)) {
@@ -598,8 +626,12 @@ export class ManagedAgentManager {
       const failedDir = `${target.installDir}.failed-deploy-${new Date().toISOString().replace(/[:.]/g, "-")}`;
       try {
         await fs.mkdir(target.installDir, { recursive: true });
+        this.logOperation(target, "DEPLOY", "install_dir_ready", startedAt, context, { version: normalizedVersion });
+        this.logOperation(target, "DEPLOY", "compose_download_start", startedAt, context, { version: normalizedVersion });
         const composeBody = await this.downloadCompose(target, normalizedVersion);
+        this.logOperation(target, "DEPLOY", "compose_download_complete", startedAt, context, { version: normalizedVersion });
         await this.writeNewEnvironment(target, normalizedVersion, environment);
+        this.logOperation(target, "DEPLOY", "environment_written", startedAt, context, { version: normalizedVersion });
         const configDir = path.join(target.installDir, "config");
         if (target.agentType === "device-agent") {
           await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
@@ -608,23 +640,35 @@ export class ManagedAgentManager {
         await fs.writeFile(paths.compose, composeBody, "utf8");
         await this.applyOwnership(target, [paths.env, paths.compose, ...(target.agentType === "device-agent" ? [configDir] : [])]);
 
+        this.logOperation(target, "DEPLOY", "compose_config_start", startedAt, context, { timeout_ms: this.config.operationTimeoutMs });
         await this.runner.run("docker", this.composeArgs(target, paths, ["config", "--quiet"]), this.config.operationTimeoutMs);
+        this.logOperation(target, "DEPLOY", "compose_config_complete", startedAt, context);
+        this.logOperation(target, "DEPLOY", "docker_pull_start", startedAt, context, { timeout_ms: this.config.operationTimeoutMs });
         await this.runner.run("docker", this.composeArgs(target, paths, ["pull", target.definition.serviceName]), this.config.operationTimeoutMs);
+        this.logOperation(target, "DEPLOY", "docker_pull_complete", startedAt, context);
+        this.logOperation(target, "DEPLOY", "docker_up_start", startedAt, context, { timeout_ms: this.config.operationTimeoutMs });
         await this.runner.run("docker", this.composeArgs(target, paths, ["up", "-d", "--no-deps", target.definition.serviceName]), this.config.operationTimeoutMs);
+        this.logOperation(target, "DEPLOY", "docker_up_complete", startedAt, context);
 
         const after = await this.inspectContainer(target, paths);
         const targetImage = `${target.definition.image}:${normalizedVersion}`;
         if (after.state !== "running") throw new Error(`deployed ${this.key(target)} is not running (state=${after.state})`);
         if (after.image !== targetImage) throw new Error(`deployed ${this.key(target)} is running unexpected image ${after.image ?? "unknown"}`);
         const tokenCheck = await this.checkToken(agentType, instance);
+        this.logOperation(target, "DEPLOY", "success", startedAt, context, { version: normalizedVersion, container_id: after.id });
         return { ...(await this.getStatus(agentType, instance)), target_version: normalizedVersion, token_hash: tokenCheck.token_hash, token_fingerprint: tokenCheck.token_fingerprint, configured_token_hash: tokenCheck.configured_token_hash, configured_token_fingerprint: tokenCheck.configured_token_fingerprint, runtime_token_hash: tokenCheck.runtime_token_hash, runtime_token_fingerprint: tokenCheck.runtime_token_fingerprint, runtime_token_present: tokenCheck.runtime_token_present, configured_sensorsphere_url: tokenCheck.configured_sensorsphere_url, runtime_sensorsphere_url: tokenCheck.runtime_sensorsphere_url };
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.logOperation(target, "DEPLOY", "failed", startedAt, context, { version: normalizedVersion, error: errorMessage });
         try {
+          this.logOperation(target, "DEPLOY", "rollback_start", startedAt, context);
           if (await this.exists(paths.env) && await this.exists(paths.compose)) {
             await this.runner.run("docker", this.composeArgs(target, paths, ["down", "--remove-orphans"]), this.config.operationTimeoutMs);
           }
           if (await this.exists(target.installDir)) await fs.rename(target.installDir, failedDir);
-        } catch {
+          this.logOperation(target, "DEPLOY", "rollback_archived", startedAt, context, { archive_dir: failedDir });
+        } catch (rollbackError) {
+          this.logOperation(target, "DEPLOY", "rollback_failed", startedAt, context, { error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError) });
           // Preserve the original deployment error. Failed artifacts remain for diagnostics if cleanup also fails.
         }
         throw error;
@@ -641,9 +685,11 @@ export class ManagedAgentManager {
     }
   }
 
-  async update(version: string, agentType: ManagedAgentType = "device-agent", instance = "main"): Promise<Record<string, unknown>> {
+  async update(version: string, agentType: ManagedAgentType = "device-agent", instance = "main", context: ManagedOperationContext = {}): Promise<Record<string, unknown>> {
     const target = this.target(agentType, instance);
     const normalizedVersion = this.validateVersion(version);
+    const startedAt = Date.now();
+    this.logOperation(target, "UPDATE", "start", startedAt, context, { version: normalizedVersion, install_dir: target.installDir });
     return this.withOperation(target, async () => {
       const paths = this.paths(target);
       if (!(await this.exists(paths.env)) || !(await this.exists(paths.compose))) {
@@ -667,13 +713,20 @@ export class ManagedAgentManager {
         await fs.rename(composeTemp, paths.compose);
         await this.applyOwnership(target, [paths.env, paths.compose, envBackup, composeBackup]);
 
+        this.logOperation(target, "UPDATE", "compose_config_start", startedAt, context, { timeout_ms: this.config.operationTimeoutMs });
         await this.runner.run("docker", this.composeArgs(target, paths, ["config", "--quiet"]), this.config.operationTimeoutMs);
+        this.logOperation(target, "UPDATE", "compose_config_complete", startedAt, context);
+        this.logOperation(target, "UPDATE", "docker_pull_start", startedAt, context, { timeout_ms: this.config.operationTimeoutMs });
         await this.runner.run("docker", this.composeArgs(target, paths, ["pull", target.definition.serviceName]), this.config.operationTimeoutMs);
+        this.logOperation(target, "UPDATE", "docker_pull_complete", startedAt, context);
+        this.logOperation(target, "UPDATE", "docker_up_start", startedAt, context, { timeout_ms: this.config.operationTimeoutMs });
         await this.runner.run("docker", this.composeArgs(target, paths, ["up", "-d", "--no-deps", target.definition.serviceName]), this.config.operationTimeoutMs);
+        this.logOperation(target, "UPDATE", "docker_up_complete", startedAt, context);
 
         const after = await this.inspectContainer(target, paths);
         if (after.state !== "running") throw new Error(`updated ${this.key(target)} is not running (state=${after.state})`);
         if (after.image !== targetImage) throw new Error(`updated ${this.key(target)} is running unexpected image ${after.image ?? "unknown"}`);
+        this.logOperation(target, "UPDATE", "success", startedAt, context, { version: normalizedVersion, container_id: after.id });
         return {
           agent_type: target.agentType,
           instance: target.instance,
@@ -686,13 +739,16 @@ export class ManagedAgentManager {
           backup_compose: composeBackup,
         };
       } catch (error) {
+        this.logOperation(target, "UPDATE", "failed", startedAt, context, { version: normalizedVersion, error: error instanceof Error ? error.message : String(error) });
         if (backupsCreated) {
           try {
+            this.logOperation(target, "UPDATE", "rollback_start", startedAt, context);
             await fs.copyFile(envBackup, paths.env);
             await fs.copyFile(composeBackup, paths.compose);
             await this.applyOwnership(target, [paths.env, paths.compose]);
             await this.runner.run("docker", this.composeArgs(target, paths, ["pull", target.definition.serviceName]), this.config.operationTimeoutMs);
             await this.runner.run("docker", this.composeArgs(target, paths, ["up", "-d", "--no-deps", target.definition.serviceName]), this.config.operationTimeoutMs);
+            this.logOperation(target, "UPDATE", "rollback_complete", startedAt, context);
           } catch (rollbackError) {
             const original = error instanceof Error ? error.message : String(error);
             const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
@@ -779,16 +835,21 @@ export class ManagedAgentManager {
     return { configured: false, endpoints: [], config_path: configPath };
   }
 
-  async remove(agentType: ManagedAgentType, instance = "main"): Promise<Record<string, unknown>> {
+  async remove(agentType: ManagedAgentType, instance = "main", context: ManagedOperationContext = {}): Promise<Record<string, unknown>> {
     const target = this.target(agentType, instance);
+    const startedAt = Date.now();
+    this.logOperation(target, "REMOVE", "start", startedAt, context, { install_dir: target.installDir });
     return this.withOperation(target, async () => {
       const paths = this.paths(target);
       if (!(await this.exists(paths.env)) || !(await this.exists(paths.compose))) {
         throw new Error(`${this.key(target)} is not installed`);
       }
+      this.logOperation(target, "REMOVE", "docker_down_start", startedAt, context, { timeout_ms: this.config.operationTimeoutMs });
       await this.runner.run("docker", this.composeArgs(target, paths, ["down", "--remove-orphans"]), this.config.operationTimeoutMs);
+      this.logOperation(target, "REMOVE", "docker_down_complete", startedAt, context);
       const archiveDir = `${target.installDir}.removed-${new Date().toISOString().replace(/[:.]/g, "-")}`;
       await fs.rename(target.installDir, archiveDir);
+      this.logOperation(target, "REMOVE", "success", startedAt, context, { archive_dir: archiveDir });
       return {
         agent_type: target.agentType,
         instance: target.instance,
