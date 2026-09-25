@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import WebSocket from "ws";
 import type { SupervisorConfig } from "./config.js";
-import type { ManagedAgentManager, ManagedAssignment } from "./manager.js";
+import type { ManagedAgentManager, ManagedAssignment, ManagedOperationProgress } from "./manager.js";
 import type { SelfUpdateManager } from "./self-manager.js";
 
 interface RemoteCommand {
@@ -260,6 +260,19 @@ export class SensorSphereSupervisorClient {
       version: message.version ?? null,
       message: "Supervisor managed command received",
     }));
+    const progress = (event: ManagedOperationProgress): void => {
+      if (this.socket?.readyState !== WebSocket.OPEN) return;
+      this.socket.send(JSON.stringify({
+        type: "SUPERVISOR_COMMAND_PROGRESS",
+        commandId: message.commandId,
+        operation: message.operation,
+        agentType: message.agentType ?? null,
+        instance: message.instance ?? "main",
+        step: event.step,
+        elapsedMs: event.elapsedMs,
+        details: event.details,
+      }));
+    };
     let result: unknown;
     try {
       switch (message.operation) {
@@ -268,17 +281,17 @@ export class SensorSphereSupervisorClient {
           break;
         case "DEPLOY":
           if (!message.agentType || !message.version) throw new Error("agentType and version are required");
-          result = await this.manager.deploy(message.agentType, message.instance ?? "main", message.version, message.environment ?? {}, { commandId: message.commandId });
+          result = await this.manager.deploy(message.agentType, message.instance ?? "main", message.version, message.environment ?? {}, { commandId: message.commandId, onProgress: progress });
           break;
         case "UPDATE":
           if (!message.agentType || !message.version) throw new Error("agentType and version are required");
           if (!message.managementId || !message.agentId) throw new Error("managed UPDATE requires managementId and agentId");
           this.manager.assertManagedAssignment(message.agentType, message.instance ?? "main", message.managementId, message.agentId);
-          result = await this.manager.update(message.version, message.agentType, message.instance ?? "main", { commandId: message.commandId });
+          result = await this.manager.update(message.version, message.agentType, message.instance ?? "main", { commandId: message.commandId, onProgress: progress });
           break;
         case "REMOVE":
           if (!message.agentType) throw new Error("agentType is required");
-          result = await this.manager.remove(message.agentType, message.instance ?? "main", { commandId: message.commandId });
+          result = await this.manager.remove(message.agentType, message.instance ?? "main", { commandId: message.commandId, onProgress: progress });
           break;
         case "GET_PROXMOX_CONFIG":
           result = await this.manager.getProxmoxConfig(message.instance ?? "main");

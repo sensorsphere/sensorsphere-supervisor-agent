@@ -287,6 +287,10 @@ A Supervisor can be assigned to a functional deployment environment with `SENSOR
 The installer now verifies Supervisor readiness against the host-side Unix socket path. For namespaced environments, the host socket lives under `SUPERVISOR_SOCKET_DIR` (for example `/run/sensorsphere/dit/supervisor.sock`) while the in-container socket path remains `/run/sensorsphere-supervisor-agent/supervisor.sock` for managed-agent compatibility. `DEFAULT` continues to verify `/run/sensorsphere-supervisor-agent/supervisor.sock`.
 
 
+## 0.8.5 managed operation progress
+
+Managed `DEPLOY`, `UPDATE` and `REMOVE` lifecycle steps are now forwarded to SensorSphere with the command id and elapsed time, allowing the frontend to display live Actions details while retaining the structured local logs introduced in 0.8.4.
+
 ## 0.8.2 installer runtime summary
 
 The installer startup summary now displays the SensorSphere URL first and the resolved host-side Supervisor socket directly below the managed root. The socket shown is the environment-isolated host path (for example `/run/sensorsphere/dit/supervisor.sock`), while the in-container socket path remains stable for managed-agent compatibility.

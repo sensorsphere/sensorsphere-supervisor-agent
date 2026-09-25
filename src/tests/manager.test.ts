@@ -113,6 +113,32 @@ test("deploy creates a monitor-agent instance from the known registry", async ()
   assert.ok(runner.calls.some(({ args }) => args.includes("up") && args.includes("monitor-agent")));
 });
 
+test("deploy reports structured lifecycle progress", async () => {
+  const { config, runner } = await fixture();
+  runner.image = "ghcr.io/sensorsphere/sensorsphere-monitor-agent:1.0.9";
+  const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);
+  const steps: string[] = [];
+  await manager.deploy("monitor-agent", "main", "1.0.9", {
+    SENSORSPHERE_URL: "http://example",
+    SENSORSPHERE_AGENT_TOKEN: "ssma_test",
+    AGENT_NAME: "monitor-main",
+  }, { commandId: "command-1", onProgress: event => steps.push(event.step) });
+  assert.deepEqual(steps, [
+    "start",
+    "install_dir_ready",
+    "compose_download_start",
+    "compose_download_complete",
+    "environment_written",
+    "compose_config_start",
+    "compose_config_complete",
+    "docker_pull_start",
+    "docker_pull_complete",
+    "docker_up_start",
+    "docker_up_complete",
+    "success",
+  ]);
+});
+
 test("deploy rejects missing secrets and non-allowlisted environment keys", async () => {
   const { config, runner } = await fixture();
   const manager = new ManagedAgentManager(config, runner, fetchForKnownAgents);

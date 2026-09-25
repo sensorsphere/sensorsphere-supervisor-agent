@@ -42,8 +42,15 @@ interface ManagedPaths {
   compose: string;
 }
 
-interface ManagedOperationContext {
+export interface ManagedOperationProgress {
+  step: string;
+  elapsedMs: number;
+  details: Record<string, unknown>;
+}
+
+export interface ManagedOperationContext {
   commandId?: string;
+  onProgress?: (progress: ManagedOperationProgress) => void;
 }
 
 const COMMON_ENVIRONMENT = ["PUID", "PGID", "DATA_DIR", "AGENT_NAME", "AGENT_LABELS", "SUPERVISOR_SOCKET_DIR", "SUPERVISOR_SOCKET_PATH"];
@@ -253,16 +260,19 @@ export class ManagedAgentManager {
     context: ManagedOperationContext = {},
     extra: Record<string, unknown> = {},
   ): void {
-    console.log(JSON.stringify({
+    const elapsedMs = Date.now() - startedAt;
+    const payload = {
       command_id: context.commandId ?? null,
       operation,
       agent_type: target.agentType,
       instance: target.instance,
       step,
-      elapsed_ms: Date.now() - startedAt,
+      elapsed_ms: elapsedMs,
       ...extra,
       message: "Managed agent lifecycle",
-    }));
+    };
+    console.log(JSON.stringify(payload));
+    context.onProgress?.({ step, elapsedMs, details: { ...extra } });
   }
 
   private paths(target: ManagedTarget): ManagedPaths {
